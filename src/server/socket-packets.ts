@@ -41,10 +41,17 @@ export interface ObstacleState {
     color?: number;
 }
 
+export interface ProjectileState {
+    id: string;
+    position: Vector3;
+}
+
 export interface GameState {
     players: PlayerState[];
     obstacles: ObstacleState[];
+    projectiles?: ProjectileState[];
     catcherId?: string;
+    catcherSlowedUntil?: number;
     caughtPlayerIds?: string[];
     startTime?: number;
     isGameOver?: boolean;
@@ -53,5 +60,10 @@ export interface GameState {
 }
 
 export interface MoveEvent {
+    direction: Vector3;
+}
+
+export interface ShootEvent {
+    position: Vector3;
     direction: Vector3;
 }

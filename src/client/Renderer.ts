@@ -26,6 +26,9 @@ export class Renderer {
     private targetPositions: Map<string, THREE.Vector3> = new Map();
     private targetQuaternions: Map<string, THREE.Quaternion> = new Map();
 
+    private projectiles: Map<string, THREE.Mesh> = new Map();
+    private catcherSlowedUntil: number = 0;
+
     constructor() {
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x87CEEB); 
@@ -78,7 +81,6 @@ export class Renderer {
         this.scene.add(gridHelper);
 
         window.addEventListener('resize', () => this.onWindowResize(), false);
-        this.addEdgeObstacles();
     }
 
     private addEdgeObstacles() {
@@ -127,6 +129,9 @@ export class Renderer {
         for (const [id, obstacle] of this.obstacles.entries()) {
             this.updateObstacleCollider(id, obstacle);
         }
+
+        this.addEdgeObstacles();
+
     }
 
     public teleportPlayer(id: string, position: THREE.Vector3) {
@@ -243,10 +248,47 @@ export class Renderer {
         const group = this.cubes.get(id); if (!group) return;
         if (group.scale) { const scale = isCatcher ? 1.2 : 1.0; group.scale.set(scale, scale, scale); }
         const visual = group.getObjectByName("visual") as THREE.Mesh;
+        const isSlowed = isCatcher && Date.now() < this.catcherSlowedUntil;
+        
         if (visual && visual.material instanceof THREE.MeshStandardMaterial) {
             visual.material.transparent = isCaught; visual.material.opacity = isCaught ? 0.35 : 1.0;
-            visual.material.emissive = new THREE.Color(isCatcher ? 0x222222 : 0x000000); visual.material.emissiveIntensity = isCatcher ? 0.45 : 0.0; visual.material.roughness = isCaught ? 0.8 : 0.4;
+            
+            if (isSlowed) {
+                visual.material.emissive = new THREE.Color(0x00aaff); 
+                visual.material.emissiveIntensity = 0.8;
+            } else {
+                visual.material.emissive = new THREE.Color(isCatcher ? 0x222222 : 0x000000); 
+                visual.material.emissiveIntensity = isCatcher ? 0.45 : 0.0;
+            }
+            visual.material.roughness = isCaught ? 0.8 : 0.4;
         }
+    }
+
+    public updateProjectiles(projectiles: any[]) {
+        const currentIds = new Set(projectiles.map(p => p.id));
+        projectiles.forEach(p => {
+            let mesh = this.projectiles.get(p.id);
+            if (!mesh) {
+                mesh = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.2, 16, 16),
+                    new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 1.0 })
+                );
+                this.scene.add(mesh);
+                this.projectiles.set(p.id, mesh);
+            }
+            mesh.position.set(p.position.x, p.position.y, p.position.z);
+        });
+        this.projectiles.forEach((mesh, id) => {
+            if (!currentIds.has(id)) { this.scene.remove(mesh); this.projectiles.delete(id); }
+        });
+    }
+
+    public setCatcherSlowed(until: number) {
+        this.catcherSlowedUntil = until;
+    }
+
+    public getCatcherSlowedUntil() {
+        return this.catcherSlowedUntil;
     }
 
     private updatePlayerPhysics(id: string, position: THREE.Vector3 | undefined, scale: number = 1.0) {

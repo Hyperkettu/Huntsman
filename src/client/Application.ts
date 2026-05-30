@@ -41,6 +41,10 @@ export class Application {
     private joystickVector: THREE.Vector2 = new THREE.Vector2(0, 0);
     private isTouchingJoystick: boolean = false;
 
+    private backgroundMusic: HTMLAudioElement;
+    private hasUserInteracted: boolean = false;
+    private shouldPlayMusic: boolean = window.location.pathname === '/';
+
     private stamina: number = 100;
     private maxStamina: number = 100;
     private isBoosting: boolean = false;
@@ -48,6 +52,8 @@ export class Application {
     private staminaBarFill!: HTMLDivElement;
     private boostButton!: HTMLButtonElement;
     private boostUIContainer!: HTMLDivElement;
+    private shootButton!: HTMLButtonElement;
+    private shootCooldown: number = 0;
 
     private lastTimestamp: number = 0;
     private players: string[] = [];
@@ -72,10 +78,18 @@ export class Application {
         }
 
         this.renderer = new Renderer();
+        this.backgroundMusic = new Audio();
+        if (this.shouldPlayMusic) {
+            this.backgroundMusic.src = 'music.mp3';
+            this.backgroundMusic.loop = true;
+            this.backgroundMusic.volume = 0.25;
+            this.backgroundMusic.preload = 'auto';
+        }
         this.socket = io();
         this.editor = new SceneEditor(this.renderer, this.socket);
         this.createLobbyUI();
         this.createGameOverUI();
+        this.setupBackgroundMusic();
         if (this.mode === AppMode.DISPLAY || this.mode === AppMode.CATCHER_VIEW) {
             this.createGameUI();
         } else {
@@ -275,6 +289,26 @@ export class Application {
         container.style.gap = '20px';
         container.style.zIndex = '200';
         document.body.appendChild(container);
+
+        this.shootButton = document.createElement('button');
+        this.shootButton.textContent = 'SHOOT';
+        this.shootButton.style.width = '150px';
+        this.shootButton.style.height = '150px';
+        this.shootButton.style.borderRadius = '50%';
+        this.shootButton.style.border = '6px solid #fff';
+        this.shootButton.style.backgroundColor = '#4444ff';
+        this.shootButton.style.color = '#fff';
+        this.shootButton.style.fontSize = '24px';
+        this.shootButton.style.fontWeight = 'bold';
+        this.shootButton.style.cursor = 'pointer';
+        this.shootButton.style.boxShadow = '0 0 25px rgba(0,0,255,0.6)';
+        this.shootButton.style.userSelect = 'none';
+        this.shootButton.style.touchAction = 'none';
+        const shoot = () => { if (this.shootCooldown <= 0) this.handleShoot(); };
+        this.shootButton.addEventListener('mousedown', shoot);
+        this.shootButton.addEventListener('touchstart', (e) => { e.preventDefault(); shoot(); });
+        container.appendChild(this.shootButton);
+
         this.staminaBarContainer = document.createElement('div');
         this.staminaBarContainer.style.width = '120px';
         this.staminaBarContainer.style.height = '12px';
@@ -311,6 +345,27 @@ export class Application {
         this.boostButton.addEventListener('mouseup', stopBoost);
         this.boostButton.addEventListener('mouseleave', stopBoost);
         container.appendChild(this.boostButton);
+    }
+
+    private handleShoot() {
+        const cube = this.renderer.getCube(this.myId!);
+        if (!cube) return;
+        const shootDir = new THREE.Vector3(0, 0, -1);
+        if (this.joystickVector.lengthSq() > 0.01) {
+            shootDir.set(this.joystickVector.x, 0, -this.joystickVector.y).normalize();
+        } else {
+            let x = 0; let z = 0;
+            if (this.keys['w'] || this.keys['arrowup']) z = -1;
+            if (this.keys['s'] || this.keys['arrowdown']) z = 1;
+            if (this.keys['a'] || this.keys['arrowleft']) x = -1;
+            if (this.keys['d'] || this.keys['arrowright']) x = 1;
+            if (x !== 0 || z !== 0) shootDir.set(x, 0, z).normalize();
+        }
+        this.socket.emit('shoot', {
+            position: { x: cube.position.x, y: cube.position.y, z: cube.position.z },
+            direction: { x: shootDir.x, y: shootDir.y, z: shootDir.z }
+        });
+        this.shootCooldown = 2.0;
     }
 
     private updateLobbyUI(state: GameState) {
@@ -414,8 +469,40 @@ export class Application {
         this.gameOverOverlay = overlay;
     }
 
+    private setupBackgroundMusic() {
+        if (!this.shouldPlayMusic) return;
+        const resumeMusic = () => {
+            this.hasUserInteracted = true;
+            this.startBackgroundMusic();
+            window.removeEventListener('pointerdown', resumeMusic);
+            window.removeEventListener('keydown', resumeMusic);
+        };
+
+        window.addEventListener('pointerdown', resumeMusic, { once: true });
+        window.addEventListener('keydown', resumeMusic, { once: true });
+        this.backgroundMusic.addEventListener('error', () => {
+            console.warn('Background music could not be loaded.', this.backgroundMusic.error);
+        });
+    }
+
+    private startBackgroundMusic() {
+        if (!this.shouldPlayMusic || !this.hasUserInteracted) return;
+        if (this.backgroundMusic.paused) {
+            void this.backgroundMusic.play().catch(() => {
+                // Autoplay denied until user interacts.
+            });
+        }
+    }
+
+    private stopBackgroundMusic() {
+        if (!this.backgroundMusic.paused) {
+            this.backgroundMusic.pause();
+            this.backgroundMusic.currentTime = 0;
+        }
+    }
+
     private updateGameUI(state: GameState) {
-        if (this.mode !== AppMode.DISPLAY) return;
+        if (this.mode !== AppMode.DISPLAY && this.mode !== AppMode.CATCHER_VIEW) return;
         this.serverStartTime = state.startTime;
         this.isGameOver = !!state.isGameOver;
         this.catcherId = state.catcherId || null;
@@ -449,7 +536,7 @@ export class Application {
         }
         const myStatus = document.createElement('div');
         myStatus.style.marginTop = '4px';
-        myStatus.textContent = 'Spectating';
+        myStatus.textContent = this.mode === AppMode.CATCHER_VIEW ? 'Catcher View' : 'Spectating';
         this.gameStatusText.appendChild(myStatus);
         this.caughtList.innerHTML = '';
         const caughtPlayers = state.players ? state.players.filter(p => this.caughtPlayerIds.has(p.id)) : [];
@@ -487,6 +574,7 @@ export class Application {
             this.gameOverOverlay.style.display = 'none';
             this.updateLobbyUI(state);
             this.stamina = this.maxStamina;
+            this.stopBackgroundMusic();
         } else {
             this.lobbyContainer.style.display = 'none';
             if (this.mode === AppMode.DISPLAY || this.mode === AppMode.CATCHER_VIEW) {
@@ -495,8 +583,18 @@ export class Application {
             } else {
                 if (this.joystickContainer) this.joystickContainer.style.display = 'block';
                 const boostUI = document.getElementById('boost-ui-container');
-                if (boostUI) boostUI.style.display = this.myId === this.catcherId ? 'flex' : 'none';
+                if (boostUI) {
+                    boostUI.style.display = 'flex';
+                    if (this.boostButton) this.boostButton.style.display = this.myId === this.catcherId ? 'block' : 'none';
+                    if (this.staminaBarContainer) this.staminaBarContainer.style.display = this.myId === this.catcherId ? 'block' : 'none';
+                    if (this.shootButton) this.shootButton.style.display = this.myId !== this.catcherId ? 'block' : 'none';
+                }
                 this.gameOverOverlay.style.display = this.isGameOver ? 'block' : 'none';
+            }
+            if (!this.isGameOver && this.shouldPlayMusic) {
+                this.startBackgroundMusic();
+            } else {
+                this.stopBackgroundMusic();
             }
         }
 
@@ -538,6 +636,11 @@ export class Application {
             });
             this.renderer.cleanupObstacles(currentObsIds);
         }
+
+        this.renderer.setCatcherSlowed(state.catcherSlowedUntil || 0);
+        if (state.projectiles) {
+            this.renderer.updateProjectiles(state.projectiles);
+        }
     }
 
     private update(timestamp: number) {
@@ -551,6 +654,18 @@ export class Application {
 
         if (this.teleportCooldown > 0) this.teleportCooldown -= deltaTime;
         if (this.teleportGracePeriod > 0) this.teleportGracePeriod -= deltaTime;
+        if (this.shootCooldown > 0) {
+            this.shootCooldown -= deltaTime;
+            if (this.shootButton) {
+                this.shootButton.style.opacity = '0.5';
+                this.shootButton.disabled = true;
+                this.shootButton.textContent = `COOLDOWN (${Math.ceil(this.shootCooldown)}s)`;
+            }
+        } else if (this.shootButton) {
+            this.shootButton.style.opacity = '1.0';
+            this.shootButton.disabled = false;
+            this.shootButton.textContent = 'SHOOT';
+        }
 
         if (this.mode === AppMode.DISPLAY || this.mode === AppMode.CATCHER_VIEW) {
             if (this.serverStartTime && !this.isGameOver) {
@@ -634,8 +749,10 @@ export class Application {
         if (moveDir.lengthSq() > 0) {
             this.wasMoving = true;
             const isCatcher = this.myId === this.catcherId;
+            const isSlowed = isCatcher && Date.now() < this.renderer.getCatcherSlowedUntil();
             const baseSpeed = isCatcher ? 10 : 9;
-            const speed = ((isCatcher && this.isBoosting && this.stamina > 0) ? baseSpeed * 1.8 : baseSpeed) * inputMagnitude;
+            const speedMult = isSlowed ? 0.4 : 1.0;
+            const speed = ((isCatcher && this.isBoosting && this.stamina > 0) ? baseSpeed * 1.8 : baseSpeed) * inputMagnitude * speedMult;
             
             const horizontalMovement = moveDir.clone().multiplyScalar(speed * deltaTime);
             const gravity = -9.81 * deltaTime;

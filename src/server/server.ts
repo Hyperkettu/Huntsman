@@ -8,7 +8,7 @@ import * as io from 'socket.io';
 import http from 'http';
 import { Routes } from './controllers/routes'
 import { ServerSocket } from './sockets/server-socket'
-import { CredentialsData, PlayerState, GameState, ObstacleState } from './socket-packets';
+import { CredentialsData, PlayerState, GameState, ObstacleState, Vector3, ShootEvent } from './socket-packets';
 
 const COLORS = [
     0xff0000, 0x00ff00, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff, 0xffa500, 0x800080
@@ -32,6 +32,11 @@ export class NetworkHackServer {
     private inLobby: boolean = true;
     private catchDistance: number = 2.5;
     private singlePlayerTimer?: any;
+    
+    private projectiles: Map<string, { id: string, position: Vector3, velocity: Vector3 }> = new Map();
+    private projectileCounter: number = 0;
+    private catcherSlowedUntil: number = 0;
+    private projectileUpdateInterval?: any;
 
     constructor() {
         this.createApp();
@@ -41,6 +46,52 @@ export class NetworkHackServer {
         this.initializeWebSockets();    
         this.initializeBackendServices();
         this.listen();
+        this.startProjectileLoop();
+    }
+
+    private startProjectileLoop() {
+        if (this.projectileUpdateInterval) clearInterval(this.projectileUpdateInterval);
+        this.projectileUpdateInterval = setInterval(() => {
+            if (this.projectiles.size === 0 && this.catcherSlowedUntil < Date.now()) return;
+            this.updateProjectiles();
+        }, 50); // 20 FPS for projectiles
+    }
+
+    private updateProjectiles() {
+        const now = Date.now();
+        const deltaTime = 0.05;
+        const toDelete: string[] = [];
+
+        this.projectiles.forEach((p, id) => {
+            p.position.x += p.velocity.x * deltaTime;
+            p.position.y += p.velocity.y * deltaTime;
+            p.position.z += p.velocity.z * deltaTime;
+
+            // Check boundaries (50x50 area)
+            if (Math.abs(p.position.x) > 25 || Math.abs(p.position.z) > 25) {
+                toDelete.push(id);
+                return;
+            }
+
+            // Check hit catcher
+            if (this.catcherId) {
+                const catcher = this.players.get(this.catcherId);
+                if (catcher) {
+                    const dx = p.position.x - catcher.position.x;
+                    const dy = p.position.y - catcher.position.y;
+                    const dz = p.position.z - catcher.position.z;
+                    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+                    if (dist < 1.5) {
+                        this.catcherSlowedUntil = now + 3000; // Slowed for 3 seconds
+                        toDelete.push(id);
+                        console.log(`Catcher ${this.catcherId} slowed!`);
+                    }
+                }
+            }
+        });
+
+        toDelete.forEach(id => this.projectiles.delete(id));
+        this.broadcastGameState();
     }
 
     private getPublicPath(): string {
@@ -201,6 +252,25 @@ export class NetworkHackServer {
                     this.saveScene();
                     this.broadcastGameState();
                 });
+
+                socket.on('shoot', (data: ShootEvent) => {
+                    const p = this.players.get(socket.id);
+                    if (p && !this.isPlayerCaught(socket.id) && socket.id !== this.catcherId) {
+                        const id = `projectile_${this.projectileCounter++}`;
+                        const speed = 25;
+                        const velocity = {
+                            x: data.direction.x * speed,
+                            y: 0,
+                            z: data.direction.z * speed
+                        };
+                        this.projectiles.set(id, {
+                            id,
+                            position: { ...data.position, y: 0.5 },
+                            velocity
+                        });
+                        console.log(`Player ${socket.id} shot!`);
+                    }
+                });
             },
             onResetServer: (data: CredentialsData, socket: io.Socket) => {},
              onDisconnect: async (socket: io.Socket) => {
@@ -231,7 +301,12 @@ export class NetworkHackServer {
                 pairId: o.pairId,
                 color: o.color
             })),
+            projectiles: Array.from(this.projectiles.values()).map(p => ({
+                id: p.id,
+                position: p.position
+            })),
             catcherId: this.catcherId || undefined,
+            catcherSlowedUntil: this.catcherSlowedUntil,
             caughtPlayerIds: Array.from(this.caughtPlayerIds),
             startTime: this.startTime,
             isGameOver: this.isGameOver,
