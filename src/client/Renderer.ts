@@ -22,6 +22,10 @@ export class Renderer {
     private teleportRegistry: Map<string, { id: string, pairId: string, color: number }> = new Map();
     private teleportParticles: Map<string, { points: THREE.Points, basePos: THREE.Vector3, velocities: Float32Array }> = new Map();
 
+    private lastPositions: Map<string, THREE.Vector3> = new Map();
+    private targetPositions: Map<string, THREE.Vector3> = new Map();
+    private targetQuaternions: Map<string, THREE.Quaternion> = new Map();
+
     constructor() {
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color(0x87CEEB); 
@@ -111,7 +115,7 @@ export class Renderer {
         this.characterController.setMaxSlopeClimbAngle(45 * Math.PI / 180);
         this.characterController.setMinSlopeSlideAngle(30 * Math.PI / 180);
         this.characterController.enableAutostep(0.7, 0.3, true);
-        this.characterController.enableSnapToGround(0.5);
+        this.characterController.enableSnapToGround(0.0); // Disable snap to ground to avoid fighting with manual gravity
 
         this.physicsInitialized = true;
         console.log("Rapier physics initialized");
@@ -154,9 +158,9 @@ export class Renderer {
         
         body.setNextKinematicTranslation(newPos);
         
-        // Immediate visual update for the mover
+        // Immediate visual update for the local mover to prevent lag and ensure disp is calculated correctly
         const group = this.cubes.get(id);
-        if (group) {
+        if (group && id === this.myId) {
             group.position.set(newPos.x, newPos.y, newPos.z);
         }
 
@@ -186,12 +190,38 @@ export class Renderer {
             const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: color || 0xffffff, roughness: 0.4, metalness: 0.7 }));
             mesh.name = "visual"; mesh.castShadow = true;
             group.add(mesh); this.scene.add(group); this.cubes.set(id, group as any);
+            this.lastPositions.set(id, group.position.clone());
         }
         const visual = group.getObjectByName("visual") as THREE.Mesh;
         if (visual && visual.material instanceof THREE.MeshStandardMaterial) visual.material.color.setHex(color);
         
-        if (position) group.position.set(position.x, position.y, position.z);
-        if (quaternion && visual) visual.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
+        const isLocal = id === this.myId;
+        
+        if (position) {
+            if (isLocal) {
+                // Keep physics synced for local mover
+                if (this.physicsInitialized && this.world) {
+                    this.updatePlayerPhysics(id, new THREE.Vector3(position.x, position.y, position.z), group.scale.y);
+                }
+            } else {
+                // Set targets for remote interpolation
+                this.targetPositions.set(id, new THREE.Vector3(position.x, position.y, position.z));
+                // Update physics body so collisions are still accurate even if visual is lerping
+                if (this.physicsInitialized && this.world) {
+                    this.updatePlayerPhysics(id, new THREE.Vector3(position.x, position.y, position.z), group.scale.y);
+                }
+            }
+        }
+
+        if (quaternion) {
+            if (isLocal) {
+                // Snap visual roll if it's the mover's first initialization or forced reset
+                if (visual) visual.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
+            } else {
+                // Set target for rotation interpolation
+                this.targetQuaternions.set(id, new THREE.Quaternion(quaternion.x, quaternion.y, quaternion.z, quaternion.w));
+            }
+        }
 
         let label = this.playerLabels.get(id);
         const displayName = name || `Player ${id.substring(0, 4)}`;
@@ -201,10 +231,6 @@ export class Renderer {
             this.scene.add(label); this.playerLabels.set(id, label);
         }
         if (label) { const offset = (group.scale.y * 0.5) + 0.8; label.position.set(group.position.x, group.position.y + offset, group.position.z); }
-        
-        if (this.physicsInitialized && this.world && position) {
-            this.updatePlayerPhysics(id, group.position, group.scale.y);
-        }
     }
 
     private createNameLabel(name: string): THREE.Sprite {
@@ -236,14 +262,14 @@ export class Renderer {
             const startPos = position || new THREE.Vector3(0, 0.5, 0);
             const rigidBodyDesc = RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(startPos.x, startPos.y, startPos.z);
             body = this.world.createRigidBody(rigidBodyDesc);
-            const colliderDesc = RAPIER.ColliderDesc.ball(0.45 * scale);
+            const colliderDesc = RAPIER.ColliderDesc.ball(0.5 * scale);
             this.world.createCollider(colliderDesc, body);
             this.playerBodies.set(id, body);
         } else {
             const collider = body.collider(0); const shape = collider.shape() as any;
-            if (shape && shape.radius && Math.abs(shape.radius - 0.45 * scale) > 0.01) {
+            if (shape && shape.radius && Math.abs(shape.radius - 0.5 * scale) > 0.01) {
                 this.world.removeCollider(collider, false);
-                const colliderDesc = RAPIER.ColliderDesc.ball(0.45 * scale);
+                const colliderDesc = RAPIER.ColliderDesc.ball(0.5 * scale);
                 this.world.createCollider(colliderDesc, body);
             }
             if (position) {
@@ -325,22 +351,58 @@ export class Renderer {
         });
     }
 
-    public updatePhysics() {
+    public updatePhysics(deltaTime: number = 1/60) {
         if (!this.world || !this.physicsInitialized) return;
         this.world.step();
-        this.playerBodies.forEach((body, id) => {
-            // Visual groups follow physics bodies
-            const group = this.cubes.get(id);
-            if (group) {
-                const trans = body.translation();
-                if (!isNaN(trans.x)) {
-                    group.position.set(trans.x, trans.y, trans.z);
-                    const label = this.playerLabels.get(id);
-                    if (label) { const offset = (group.scale.y * 0.5) + 0.8; label.position.set(trans.x, trans.y + offset, trans.z); }
+        
+        this.cubes.forEach((group, id) => {
+            const isLocal = id === this.myId;
+            const visual = group.getObjectByName("visual") as THREE.Mesh;
+            
+            // 1. Position Authority & Interpolation
+            if (!isLocal) {
+                const targetPos = this.targetPositions.get(id);
+                if (targetPos) {
+                    const dist = group.position.distanceTo(targetPos);
+                    if (dist > 4.0) {
+                        group.position.copy(targetPos); // Snap for teleports
+                    } else {
+                        group.position.lerp(targetPos, 0.2); // Smooth glide
+                    }
                 }
             }
+
+            // 2. Automated Rolling (Authoritative for speed-matching)
+            const lastPos = this.lastPositions.get(id);
+            if (lastPos && visual) {
+                const disp = group.position.clone().sub(lastPos);
+                disp.y = 0;
+                if (disp.lengthSq() > 0.000001) {
+                    const axis = new THREE.Vector3(disp.z, 0, -disp.x).normalize();
+                    const angle = disp.length() / 0.5; // Radius 0.5
+                    visual.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, angle));
+                }
+            }
+            this.lastPositions.set(id, group.position.clone());
+
+            // 3. Rotation Sync (Corrective to prevent drift)
+            if (!isLocal && visual) {
+                const targetQuat = this.targetQuaternions.get(id);
+                if (targetQuat) {
+                    // Gently pull towards network rotation without fighting the active roll
+                    visual.quaternion.slerp(targetQuat, 0.05);
+                }
+            }
+
+            // 4. Update Labels
+            const label = this.playerLabels.get(id);
+            if (label) {
+                const offset = (group.scale.y * 0.5) + 0.8;
+                label.position.set(group.position.x, group.position.y + offset, group.position.z);
+            }
         });
-        this.updateParticles(1/60);
+
+        this.updateParticles(deltaTime);
     }
 
     public isPhysicsReady(): boolean { return this.physicsInitialized && !!this.world; }

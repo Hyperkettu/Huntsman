@@ -45,6 +45,7 @@ export class Application {
     private staminaBarContainer!: HTMLDivElement;
     private staminaBarFill!: HTMLDivElement;
     private boostButton!: HTMLButtonElement;
+    private boostUIContainer!: HTMLDivElement;
 
     private lastTimestamp: number = 0;
     private players: string[] = [];
@@ -489,13 +490,14 @@ export class Application {
                 const isLocal = p.id === this.myId;
                 const cube = this.renderer.getCube(p.id);
                 if (isLocal) {
+                    const needsInit = !cube;
                     if (cube && this.teleportGracePeriod <= 0) {
                         const dist = new THREE.Vector3(p.position.x, p.position.y, p.position.z).distanceTo(cube.position);
                         if (dist > 5.0) {
                             this.renderer.teleportPlayer(p.id, new THREE.Vector3(p.position.x, p.position.y, p.position.z));
                         }
                     }
-                    this.renderer.updatePlayer(p.id, undefined, undefined, p.color, p.name);
+                    this.renderer.updatePlayer(p.id, needsInit ? p.position : undefined, needsInit ? p.quaternion : undefined, p.color, p.name);
                 } else {
                     this.renderer.updatePlayer(p.id, p.position, p.quaternion, p.color, p.name);
                 }
@@ -521,29 +523,44 @@ export class Application {
     private update(timestamp: number) {
         const deltaTime = Math.min((timestamp - (this.lastTimestamp || timestamp)) / 1000, 0.1);
         this.lastTimestamp = timestamp;
+
         if (!this.renderer.isPhysicsReady()) {
             requestAnimationFrame((t) => this.update(timestampToNumber(t)));
             return;
         }
-        this.renderer.updatePhysics();
+
         if (this.teleportCooldown > 0) this.teleportCooldown -= deltaTime;
         if (this.teleportGracePeriod > 0) this.teleportGracePeriod -= deltaTime;
+
         if (this.mode === AppMode.DISPLAY) {
             if (this.serverStartTime && !this.isGameOver) {
                 const elapsedSeconds = Math.floor((Date.now() - this.serverStartTime) / 1000);
                 if (this.timerText) this.timerText.textContent = `Time: ${elapsedSeconds}s`;
             }
             this.updateCamera();
+            this.renderer.updatePhysics(deltaTime);
             this.renderer.render();
             this.players.forEach(id => this.renderer.setPlayerVisibility(id, true));
         } else if (this.myId) {
             const myCaught = (this.myId && this.caughtPlayerIds.has(this.myId)) && this.myId !== this.catcherId;
             const canMove = !this.inLobby && !this.isGameOver && !myCaught;
+            
+            const cube = this.renderer.getCube(this.myId!);
+            const posBefore = cube ? cube.position.clone() : null;
+
             if (canMove) {
                 this.updateStamina(deltaTime);
                 this.handleMovement(deltaTime);
                 this.checkTeleportLogic();
             }
+            
+            this.renderer.updatePhysics(deltaTime);
+            
+            // Sync final state (position and automated rotation) to the server
+            if (cube && canMove) {
+                this.syncToServer(cube);
+            }
+
             if (this.joystickRenderer && this.joystickScene && this.joystickCamera) {
                 this.joystickRenderer.render(this.joystickScene, this.joystickCamera);
             }
@@ -561,14 +578,18 @@ export class Application {
             this.staminaBarFill.style.width = `${p}%`;
             this.staminaBarFill.style.backgroundColor = this.stamina < 20 ? '#ff0000' : '#ffcc00';
         }
-        if (this.boostButton) { this.boostButton.style.opacity = this.stamina <= 0 ? '0.5' : '1.0'; }
+        if (this.boostButton) { 
+            this.boostButton.style.opacity = this.stamina <= 0 ? '0.5' : '1.0';
+            this.boostButton.disabled = this.stamina <= 0;
+        }
     }
 
     private handleMovement(deltaTime: number) {
-        const cube = this.renderer.getCube(this.myId!);
-        if (!cube) return;
         const moveDir = new THREE.Vector3(0, 0, 0);
+        let inputMagnitude = 0;
+        
         if (this.joystickVector.lengthSq() > 0.01) {
+            inputMagnitude = Math.min(this.joystickVector.length(), 1.0);
             moveDir.set(this.joystickVector.x, 0, -this.joystickVector.y).normalize();
         } else {
             let x = 0; let z = 0;
@@ -576,30 +597,27 @@ export class Application {
             if (this.keys['s'] || this.keys['arrowdown']) z = 1;
             if (this.keys['a'] || this.keys['arrowleft']) x = -1;
             if (this.keys['d'] || this.keys['arrowright']) x = 1;
-            if (x !== 0 || z !== 0) moveDir.set(x, 0, z).normalize();
+            if (x !== 0 || z !== 0) {
+                moveDir.set(x, 0, z).normalize();
+                inputMagnitude = 1.0;
+            }
         }
+
         if (moveDir.lengthSq() > 0) {
             this.wasMoving = true;
             const isCatcher = this.myId === this.catcherId;
-            const baseSpeed = isCatcher ? 9 : 8;
-            const speed = (isCatcher && this.isBoosting && this.stamina > 0) ? baseSpeed * 2 : baseSpeed;
-            const posBefore = cube.position.clone();
-            const movement = moveDir.clone().multiplyScalar(speed * deltaTime);
-            movement.y = (cube.position.y > 0.51) ? -9.81 * deltaTime : (0.501 - cube.position.y);
+            const baseSpeed = isCatcher ? 10 : 9;
+            const speed = ((isCatcher && this.isBoosting && this.stamina > 0) ? baseSpeed * 1.8 : baseSpeed) * inputMagnitude;
+            
+            const horizontalMovement = moveDir.clone().multiplyScalar(speed * deltaTime);
+            const gravity = -9.81 * deltaTime;
+            const movement = new THREE.Vector3(horizontalMovement.x, gravity, horizontalMovement.z);
+            
             this.renderer.movePlayer(this.myId!, movement);
-            if (cube.position.y < 0.5) cube.position.y = 0.5;
-            const disp = cube.position.clone().sub(posBefore);
-            disp.y = 0; 
-            if (disp.lengthSq() > 0.000001) {
-                const axis = new THREE.Vector3(disp.z, 0, -disp.x).normalize();
-                const angle = disp.length() / (0.5 * cube.scale.y); 
-                const visual = cube.getObjectByName("visual") as THREE.Mesh;
-                if (visual) visual.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, angle));
-            }
-            if (!isNaN(cube.position.x)) this.syncToServer(cube);
         } else if (this.wasMoving) {
             this.wasMoving = false;
-            this.syncToServer(cube);
+            const cube = this.renderer.getCube(this.myId!);
+            if (cube) this.syncToServer(cube);
         }
     }
 
