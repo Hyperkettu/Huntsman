@@ -8,6 +8,7 @@ export interface ResponseData {
 
 export interface CredentialsData extends RequestData {
     token?: string;
+    role?: 'catcher' | 'player';
 }
 
 export interface Vector3 {

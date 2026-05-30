@@ -426,4 +426,25 @@ export class Renderer {
     public getMyId() { return this.myId; }
     public getCamera() { return this.camera; }
     public getDomElement() { return this.renderer.domElement; }
+
+    public checkLineOfSight(observerId: string, targetId: string): boolean {
+        const observer = this.cubes.get(observerId);
+        const target = this.cubes.get(targetId);
+        if (!observer || !target) return false;
+
+        const start = observer.position.clone().add(new THREE.Vector3(0, 0.25, 0)); // Slightly above ground
+        const end = target.position.clone().add(new THREE.Vector3(0, 0.25, 0));
+        const direction = end.clone().sub(start);
+        const distance = direction.length();
+        direction.normalize();
+
+        this.raycaster.set(start, direction);
+        this.raycaster.far = distance;
+
+        // Check against obstacles only
+        const obstacleMeshes = Array.from(this.obstacles.values()).filter(m => !m.userData.isTeleport);
+        const intersects = this.raycaster.intersectObjects(obstacleMeshes, false);
+
+        return intersects.length === 0;
+    }
 }

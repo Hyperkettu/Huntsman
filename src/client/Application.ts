@@ -6,7 +6,8 @@ import { SceneEditor } from './SceneEditor';
 
 enum AppMode {
     DISPLAY,
-    PLAYER
+    PLAYER,
+    CATCHER_VIEW
 }
 
 export class Application {
@@ -14,6 +15,7 @@ export class Application {
     private editor: SceneEditor;
     private socket: Socket;
     private mode: AppMode;
+    private role: 'player' | 'catcher' | 'display' | 'catcher-view' = 'display';
     
     private myId: string | null = null;
     private myName: string = '';
@@ -55,13 +57,26 @@ export class Application {
     private wasMoving: boolean = false;
 
     constructor() {
-        this.mode = window.location.pathname === '/player' ? AppMode.PLAYER : AppMode.DISPLAY;
+        if (window.location.pathname === '/player') {
+            this.mode = AppMode.PLAYER;
+            this.role = 'player';
+        } else if (window.location.pathname === '/catcher') {
+            this.mode = AppMode.PLAYER;
+            this.role = 'catcher';
+        } else if (window.location.pathname === '/catcher-view') {
+            this.mode = AppMode.CATCHER_VIEW;
+            this.role = 'catcher-view';
+        } else {
+            this.mode = AppMode.DISPLAY;
+            this.role = 'display';
+        }
+
         this.renderer = new Renderer();
         this.socket = io();
         this.editor = new SceneEditor(this.renderer, this.socket);
         this.createLobbyUI();
         this.createGameOverUI();
-        if (this.mode === AppMode.DISPLAY) {
+        if (this.mode === AppMode.DISPLAY || this.mode === AppMode.CATCHER_VIEW) {
             this.createGameUI();
         } else {
             this.createJoystickUI();
@@ -76,7 +91,7 @@ export class Application {
     private setupSocket() {
         this.socket.on('connect', () => {
             if (this.mode === AppMode.PLAYER) {
-                this.socket.emit('private-join', {});
+                this.socket.emit('private-join', { role: this.role });
             }
         });
         this.socket.on('init', (data: { yourId: string, gameState: GameState }) => {
@@ -532,7 +547,7 @@ export class Application {
         if (this.teleportCooldown > 0) this.teleportCooldown -= deltaTime;
         if (this.teleportGracePeriod > 0) this.teleportGracePeriod -= deltaTime;
 
-        if (this.mode === AppMode.DISPLAY) {
+        if (this.mode === AppMode.DISPLAY || this.mode === AppMode.CATCHER_VIEW) {
             if (this.serverStartTime && !this.isGameOver) {
                 const elapsedSeconds = Math.floor((Date.now() - this.serverStartTime) / 1000);
                 if (this.timerText) this.timerText.textContent = `Time: ${elapsedSeconds}s`;
@@ -540,7 +555,15 @@ export class Application {
             this.updateCamera();
             this.renderer.updatePhysics(deltaTime);
             this.renderer.render();
-            this.players.forEach(id => this.renderer.setPlayerVisibility(id, true));
+
+            if (this.mode === AppMode.CATCHER_VIEW && this.catcherId) {
+                this.players.forEach(id => {
+                    const isVisible = id === this.catcherId || this.renderer.checkLineOfSight(this.catcherId!, id);
+                    this.renderer.setPlayerVisibility(id, isVisible);
+                });
+            } else {
+                this.players.forEach(id => this.renderer.setPlayerVisibility(id, true));
+            }
         } else if (this.myId) {
             const myCaught = (this.myId && this.caughtPlayerIds.has(this.myId)) && this.myId !== this.catcherId;
             const canMove = !this.inLobby && !this.isGameOver && !myCaught;

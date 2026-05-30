@@ -127,6 +127,11 @@ export class NetworkHackServer {
                 this.colorIndex++;
                 this.players.set(socket.id, player);
 
+                if (data.role === 'catcher') {
+                    this.catcherId = socket.id;
+                    console.log(`Manual catcher assigned: ${socket.id}`);
+                }
+
                 if (this.serverSocket) {
                     this.serverSocket.sendDataToSocket(socket, 'init', { 
                         yourId: socket.id,
@@ -239,10 +244,12 @@ export class NetworkHackServer {
             this.singlePlayerTimer = undefined;
         }
 
-        // Pick a random catcher
-        const playerIds = Array.from(this.players.keys());
-        if (playerIds.length > 0) {
-            this.catcherId = playerIds[Math.floor(Math.random() * playerIds.length)];
+        // Pick a random catcher ONLY if one wasn't manually assigned via /catcher path
+        if (!this.catcherId || !this.players.has(this.catcherId)) {
+            const playerIds = Array.from(this.players.keys());
+            if (playerIds.length > 0) {
+                this.catcherId = playerIds[Math.floor(Math.random() * playerIds.length)];
+            }
         }
 
         // Single player mode: Game lasts 30 seconds
@@ -351,7 +358,7 @@ export class NetworkHackServer {
        this.app!.use(cors({ credentials: false }));
        const publicPath = this.getPublicPath();
        this.app!.use(express.static(publicPath));
-       this.app!.get([Routes.HOME, Routes.PLAYER], (req, res) => {
+       this.app!.get([Routes.HOME, Routes.PLAYER, Routes.CATCHER, Routes.CATCHER_VIEW], (req, res) => {
             res.sendFile(path.join(publicPath, 'index.html'));
        });
     }
