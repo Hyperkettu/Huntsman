@@ -223,7 +223,14 @@ export class NetworkHackServer {
     private getGameState(): GameState {
         return {
             players: Array.from(this.players.values()),
-            obstacles: Array.from(this.obstacles.values()),
+            obstacles: Array.from(this.obstacles.values()).map(o => ({
+                id: o.id,
+                position: o.position,
+                scale: o.scale,
+                isTeleport: o.isTeleport,
+                pairId: o.pairId,
+                color: o.color
+            })),
             catcherId: this.catcherId || undefined,
             caughtPlayerIds: Array.from(this.caughtPlayerIds),
             startTime: this.startTime,

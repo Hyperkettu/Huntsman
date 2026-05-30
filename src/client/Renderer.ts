@@ -115,7 +115,7 @@ export class Renderer {
         this.characterController.setMaxSlopeClimbAngle(45 * Math.PI / 180);
         this.characterController.setMinSlopeSlideAngle(30 * Math.PI / 180);
         this.characterController.enableAutostep(0.7, 0.3, true);
-        this.characterController.enableSnapToGround(0.0); // Disable snap to ground to avoid fighting with manual gravity
+        this.characterController.enableSnapToGround(0.0);
 
         this.physicsInitialized = true;
         console.log("Rapier physics initialized");
@@ -158,7 +158,6 @@ export class Renderer {
         
         body.setNextKinematicTranslation(newPos);
         
-        // Immediate visual update for the local mover to prevent lag and ensure disp is calculated correctly
         const group = this.cubes.get(id);
         if (group && id === this.myId) {
             group.position.set(newPos.x, newPos.y, newPos.z);
@@ -199,14 +198,11 @@ export class Renderer {
         
         if (position) {
             if (isLocal) {
-                // Keep physics synced for local mover
                 if (this.physicsInitialized && this.world) {
                     this.updatePlayerPhysics(id, new THREE.Vector3(position.x, position.y, position.z), group.scale.y);
                 }
             } else {
-                // Set targets for remote interpolation
                 this.targetPositions.set(id, new THREE.Vector3(position.x, position.y, position.z));
-                // Update physics body so collisions are still accurate even if visual is lerping
                 if (this.physicsInitialized && this.world) {
                     this.updatePlayerPhysics(id, new THREE.Vector3(position.x, position.y, position.z), group.scale.y);
                 }
@@ -215,10 +211,8 @@ export class Renderer {
 
         if (quaternion) {
             if (isLocal) {
-                // Snap visual roll if it's the mover's first initialization or forced reset
                 if (visual) visual.quaternion.set(quaternion.x, quaternion.y, quaternion.z, quaternion.w);
             } else {
-                // Set target for rotation interpolation
                 this.targetQuaternions.set(id, new THREE.Quaternion(quaternion.x, quaternion.y, quaternion.z, quaternion.w));
             }
         }
@@ -282,25 +276,53 @@ export class Renderer {
     public updateObstacle(id: string, position: any, scale: any, fromServer: boolean = false, extra?: any) {
         if (fromServer && this.pendingObstacles.has(id)) this.pendingObstacles.delete(id);
         let obstacle = this.obstacles.get(id);
-        const isTeleport = (extra && extra.isTeleport === true) || (obstacle && obstacle.userData.isTeleport === true);
-        const pairId = (extra && extra.pairId) || (obstacle && obstacle.userData.pairId) || "";
-        const color = (extra && extra.color) || (obstacle && obstacle.userData.color) || (isTeleport ? 0x00ffff : 0x888888);
+        
+        const isTeleport = (extra && extra.isTeleport === true);
+        const pairId = (extra && extra.pairId) || "";
+        const color = (extra && extra.color) !== undefined ? extra.color : (isTeleport ? 0x00ffff : 0x888888);
+
         if (!obstacle) {
             const geometry = isTeleport ? new THREE.CylinderGeometry(1, 1, 0.1, 32) : new THREE.BoxGeometry(1, 1, 1);
-            const material = new THREE.MeshStandardMaterial({ color: color, roughness: 0.5, metalness: 0.5, transparent: isTeleport, opacity: isTeleport ? 0.6 : 1.0 });
-            obstacle = new THREE.Mesh(geometry, material); obstacle.userData.id = id; obstacle.castShadow = !isTeleport; obstacle.receiveShadow = true;
-            this.scene.add(obstacle); this.obstacles.set(id, obstacle);
+            const material = new THREE.MeshStandardMaterial({ 
+                color: color, 
+                roughness: 0.5, 
+                metalness: 0.5, 
+                transparent: isTeleport, 
+                opacity: isTeleport ? 0.6 : 1.0 
+            });
+            obstacle = new THREE.Mesh(geometry, material);
+            obstacle.userData.id = id;
+            obstacle.castShadow = !isTeleport;
+            obstacle.receiveShadow = true;
+            this.scene.add(obstacle);
+            this.obstacles.set(id, obstacle);
         }
+
         if (position) obstacle.position.set(position.x, position.y, position.z);
         if (scale) obstacle.scale.set(scale.x, scale.y, scale.z);
-        obstacle.userData.isTeleport = isTeleport; obstacle.userData.pairId = pairId; obstacle.userData.color = color;
+        
+        obstacle.userData.isTeleport = isTeleport;
+        obstacle.userData.pairId = pairId;
+        obstacle.userData.color = color;
+
         if (isTeleport) {
             this.teleportRegistry.set(id, { id, pairId, color });
             const particleData = this.teleportParticles.get(id);
-            if (particleData) particleData.basePos.copy(obstacle.position); else this.addTeleportParticles(id, obstacle.position, color);
-            if (obstacle.material instanceof THREE.MeshStandardMaterial) obstacle.material.color.setHex(color);
-        } else this.teleportRegistry.delete(id);
-        if (this.physicsInitialized) this.updateObstacleCollider(id, obstacle);
+            if (particleData) {
+                particleData.basePos.copy(obstacle.position);
+            } else {
+                this.addTeleportParticles(id, obstacle.position, color);
+            }
+            if (obstacle.material instanceof THREE.MeshStandardMaterial) {
+                obstacle.material.color.setHex(color);
+            }
+        } else {
+            this.teleportRegistry.delete(id);
+        }
+
+        if (this.physicsInitialized) {
+            this.updateObstacleCollider(id, obstacle);
+        }
     }
 
     public cleanupObstacles(activeIds: Set<string>) {
@@ -359,42 +381,32 @@ export class Renderer {
             const isLocal = id === this.myId;
             const visual = group.getObjectByName("visual") as THREE.Mesh;
             
-            // 1. Position Authority & Interpolation
             if (!isLocal) {
                 const targetPos = this.targetPositions.get(id);
                 if (targetPos) {
                     const dist = group.position.distanceTo(targetPos);
-                    if (dist > 4.0) {
-                        group.position.copy(targetPos); // Snap for teleports
-                    } else {
-                        group.position.lerp(targetPos, 0.2); // Smooth glide
-                    }
+                    if (dist > 4.0) group.position.copy(targetPos);
+                    else group.position.lerp(targetPos, 0.2);
                 }
             }
 
-            // 2. Automated Rolling (Authoritative for speed-matching)
             const lastPos = this.lastPositions.get(id);
             if (lastPos && visual) {
                 const disp = group.position.clone().sub(lastPos);
                 disp.y = 0;
                 if (disp.lengthSq() > 0.000001) {
                     const axis = new THREE.Vector3(disp.z, 0, -disp.x).normalize();
-                    const angle = disp.length() / 0.5; // Radius 0.5
+                    const angle = disp.length() / 0.5;
                     visual.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, angle));
                 }
             }
             this.lastPositions.set(id, group.position.clone());
 
-            // 3. Rotation Sync (Corrective to prevent drift)
             if (!isLocal && visual) {
                 const targetQuat = this.targetQuaternions.get(id);
-                if (targetQuat) {
-                    // Gently pull towards network rotation without fighting the active roll
-                    visual.quaternion.slerp(targetQuat, 0.05);
-                }
+                if (targetQuat) visual.quaternion.slerp(targetQuat, 0.05);
             }
 
-            // 4. Update Labels
             const label = this.playerLabels.get(id);
             if (label) {
                 const offset = (group.scale.y * 0.5) + 0.8;
@@ -427,24 +439,39 @@ export class Renderer {
     public getCamera() { return this.camera; }
     public getDomElement() { return this.renderer.domElement; }
 
+    private addTeleportParticles(id: string, position: THREE.Vector3, color: number) {
+        const count = 50;
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(count * 3);
+        const velocities = new Float32Array(count);
+        for (let i = 0; i < count; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const radius = Math.random() * 1.0;
+            positions[i * 3] = position.x + Math.cos(angle) * radius;
+            positions[i * 3 + 1] = Math.random() * 2.0;
+            positions[i * 3 + 2] = position.z + Math.sin(angle) * radius;
+            velocities[i] = 0.5 + Math.random() * 1.0;
+        }
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const material = new THREE.PointsMaterial({ color: color, size: 0.15, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending });
+        const points = new THREE.Points(geometry, material);
+        this.scene.add(points);
+        this.teleportParticles.set(id, { points, basePos: position.clone(), velocities });
+    }
+
     public checkLineOfSight(observerId: string, targetId: string): boolean {
         const observer = this.cubes.get(observerId);
         const target = this.cubes.get(targetId);
         if (!observer || !target) return false;
-
-        const start = observer.position.clone().add(new THREE.Vector3(0, 0.25, 0)); // Slightly above ground
+        const start = observer.position.clone().add(new THREE.Vector3(0, 0.25, 0));
         const end = target.position.clone().add(new THREE.Vector3(0, 0.25, 0));
         const direction = end.clone().sub(start);
         const distance = direction.length();
         direction.normalize();
-
         this.raycaster.set(start, direction);
         this.raycaster.far = distance;
-
-        // Check against obstacles only
         const obstacleMeshes = Array.from(this.obstacles.values()).filter(m => !m.userData.isTeleport);
         const intersects = this.raycaster.intersectObjects(obstacleMeshes, false);
-
         return intersects.length === 0;
     }
 }

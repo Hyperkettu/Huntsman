@@ -477,6 +477,7 @@ export class Application {
         this.isGameOver = !!state.isGameOver;
         this.catcherId = state.catcherId || null;
         this.caughtPlayerIds = new Set(state.caughtPlayerIds || []);
+        
         if (this.inLobby) {
             this.lobbyContainer.style.display = 'block';
             if (this.statusContainer) this.statusContainer.style.display = 'none';
@@ -488,7 +489,7 @@ export class Application {
             this.stamina = this.maxStamina;
         } else {
             this.lobbyContainer.style.display = 'none';
-            if (this.mode === AppMode.DISPLAY) {
+            if (this.mode === AppMode.DISPLAY || this.mode === AppMode.CATCHER_VIEW) {
                 if (this.statusContainer) this.statusContainer.style.display = 'block';
                 this.updateGameUI(state);
             } else {
@@ -498,6 +499,7 @@ export class Application {
                 this.gameOverOverlay.style.display = this.isGameOver ? 'block' : 'none';
             }
         }
+
         if (state.players) {
             const currentIds = new Set(state.players.map(p => p.id));
             this.players = state.players.map(p => p.id);
@@ -524,11 +526,14 @@ export class Application {
             });
             this.renderer.cleanupPlayers(currentIds);
         }
+
         if (state.obstacles) {
             const currentObsIds = new Set(state.obstacles.map(o => o.id));
             state.obstacles.forEach(o => {
                 this.renderer.updateObstacle(o.id, o.position, o.scale, true, {
-                    isTeleport: (o && o.isTeleport === true), pairId: (o && o.pairId) || "", color: (o && o.color)
+                    isTeleport: o.isTeleport === true, 
+                    pairId: o.pairId || "", 
+                    color: o.color
                 });
             });
             this.renderer.cleanupObstacles(currentObsIds);
