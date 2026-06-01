@@ -734,6 +734,7 @@ export class Application {
                 if (this.timerText) this.timerText.textContent = `Time: ${elapsedSeconds}s`;
             }
             this.updateCamera();
+            this.updateObstacleTransparency();
             this.renderer.updatePhysics(deltaTime);
             this.renderer.render();
 
@@ -758,6 +759,7 @@ export class Application {
                 this.checkTeleportLogic();
             }
             
+            this.updateObstacleTransparency();
             this.renderer.updatePhysics(deltaTime);
             
             // Sync final state (position and automated rotation) to the server
@@ -770,6 +772,53 @@ export class Application {
             }
         }
         requestAnimationFrame((t) => this.update(timestampToNumber(t)));
+    }
+
+    private updateObstacleTransparency() {
+        const cam = this.renderer.getCamera();
+        const camPos = cam.position;
+        const transparentIds = new Set<string>();
+
+        const isHome = window.location.pathname === '/';
+        const isCatcherPath = window.location.pathname === '/catcher';
+        const isCatcherView = this.mode === AppMode.CATCHER_VIEW;
+        const isEditor = this.isEditorView;
+
+        if (isHome || isEditor) {
+            this.players.forEach(pid => {
+                const cube = this.renderer.getCube(pid);
+                if (cube) {
+                    const ids = this.renderer.getObstaclesBetween(camPos, cube.position);
+                    ids.forEach(id => transparentIds.add(id));
+                }
+            });
+        } else if (isCatcherPath || isCatcherView) {
+            // 1. Catcher itself (local or remote) should always trigger transparency for obstacles in front of it
+            const catcherIdToTrack = isCatcherPath ? this.myId : this.catcherId;
+            if (catcherIdToTrack) {
+                const cube = this.renderer.getCube(catcherIdToTrack);
+                if (cube) {
+                    const ids = this.renderer.getObstaclesBetween(camPos, cube.position);
+                    ids.forEach(id => transparentIds.add(id));
+                }
+            }
+
+            // 2. Other players ONLY if the catcher has LoS to them
+            if (this.catcherId) {
+                this.players.forEach(pid => {
+                    if (pid === this.catcherId) return;
+                    if (this.renderer.checkLineOfSight(this.catcherId!, pid)) {
+                        const cube = this.renderer.getCube(pid);
+                        if (cube) {
+                            const ids = this.renderer.getObstaclesBetween(camPos, cube.position);
+                            ids.forEach(id => transparentIds.add(id));
+                        }
+                    }
+                });
+            }
+        }
+
+        this.renderer.setObstaclesTransparency(transparentIds);
     }
 
     private updateStamina(deltaTime: number) {
@@ -807,7 +856,7 @@ export class Application {
             }
         }
 
-        if (moveDir.lengthSq() > 0) {
+        if (moveDir.lengthSq() > 0 || true) { // Always apply gravity
             this.wasMoving = true;
             const isCatcher = this.myId === this.catcherId;
             const isSlowed = isCatcher && Date.now() < this.renderer.getCatcherSlowedUntil();
@@ -816,7 +865,7 @@ export class Application {
             const speed = ((isCatcher && this.isBoosting && this.stamina > 0) ? baseSpeed * 1.8 : baseSpeed) * inputMagnitude * speedMult;
             
             const horizontalMovement = moveDir.clone().multiplyScalar(speed * deltaTime);
-            const gravity = -9.81 * deltaTime;
+            const gravity = -12.0 * deltaTime; // Slightly stronger gravity for better grounding
             const movement = new THREE.Vector3(horizontalMovement.x, gravity, horizontalMovement.z);
             
             this.renderer.movePlayer(this.myId!, movement);

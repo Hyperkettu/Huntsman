@@ -116,8 +116,8 @@ export class Renderer {
         this.characterController.setSlideEnabled(true);
         this.characterController.setMaxSlopeClimbAngle(45 * Math.PI / 180);
         this.characterController.setMinSlopeSlideAngle(30 * Math.PI / 180);
-        this.characterController.enableAutostep(0.7, 0.3, true);
-        this.characterController.enableSnapToGround(0.0);
+        this.characterController.enableAutostep(0.7, 0.2, true);
+        this.characterController.enableSnapToGround(0.2);
 
         this.physicsInitialized = true;
         console.log("Rapier physics initialized");
@@ -434,8 +434,39 @@ export class Renderer {
             if (!positionAttr || !velocities) return;
             for (let i = 0; i < velocities.length; i++) {
                 const currentY = positionAttr.getY(i); const nextY = currentY + velocities[i] * deltaTime;
-                if (nextY > 2) { positionAttr.setY(i, 0); const angle = Math.random() * Math.PI * 2; const radius = Math.random() * 1.0; positionAttr.setX(i, basePos.x + Math.cos(angle) * radius); positionAttr.setZ(i, basePos.z + Math.sin(angle) * radius); } else positionAttr.setY(i, nextY);
+                if (nextY > basePos.y + 2) { 
+                    positionAttr.setY(i, basePos.y); 
+                    const angle = Math.random() * Math.PI * 2; 
+                    const radius = Math.random() * 1.0; 
+                    positionAttr.setX(i, basePos.x + Math.cos(angle) * radius); 
+                    positionAttr.setZ(i, basePos.z + Math.sin(angle) * radius); 
+                } else positionAttr.setY(i, nextY);
             } positionAttr.needsUpdate = true;
+        });
+    }
+
+    public getObstaclesBetween(start: THREE.Vector3, end: THREE.Vector3): string[] {
+        const direction = end.clone().sub(start);
+        const distance = direction.length();
+        direction.normalize();
+        this.raycaster.set(start, direction);
+        this.raycaster.far = distance;
+        const obstacleMeshes = Array.from(this.obstacles.values()).filter(m => !m.userData.isTeleport);
+        const intersects = this.raycaster.intersectObjects(obstacleMeshes, false);
+        return intersects.map(hit => (hit.object.userData as any).id as string);
+    }
+
+    public setObstaclesTransparency(ids: Set<string>) {
+        this.obstacles.forEach((mesh, id) => {
+            if (mesh.userData.isTeleport) return;
+            const mat = mesh.material as THREE.MeshStandardMaterial;
+            if (ids.has(id)) {
+                mat.transparent = true;
+                mat.opacity = 0.5;
+            } else {
+                mat.transparent = false;
+                mat.opacity = 1.0;
+            }
         });
     }
 
@@ -514,7 +545,7 @@ export class Renderer {
             const angle = Math.random() * Math.PI * 2;
             const radius = Math.random() * 1.0;
             positions[i * 3] = position.x + Math.cos(angle) * radius;
-            positions[i * 3 + 1] = Math.random() * 2.0;
+            positions[i * 3 + 1] = position.y + Math.random() * 2.0;
             positions[i * 3 + 2] = position.z + Math.sin(angle) * radius;
             velocities[i] = 0.5 + Math.random() * 1.0;
         }
