@@ -367,6 +367,30 @@ export class Renderer {
         }
     }
 
+    public getObstacleId(mesh: THREE.Mesh | null | undefined): string | null {
+        if (!mesh) return null;
+        return (mesh.userData && mesh.userData.id) ? String(mesh.userData.id) : null;
+    }
+
+    public addObstacleWithId(id: string, position: THREE.Vector3, scale: THREE.Vector3, extra?: any): THREE.Mesh {
+        this.updateObstacle(id, position, scale, false, extra);
+        const mesh = this.obstacles.get(id);
+        if (!mesh) {
+            // Fallback: create a basic obstacle if updateObstacle didn't create one
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            const material = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.5, metalness: 0.5 });
+            const obstacle = new THREE.Mesh(geometry, material);
+            obstacle.userData.id = id;
+            obstacle.position.copy(position);
+            obstacle.scale.copy(scale);
+            this.scene.add(obstacle);
+            this.obstacles.set(id, obstacle);
+            if (this.physicsInitialized) this.updateObstacleCollider(id, obstacle);
+            return obstacle;
+        }
+        return mesh;
+    }
+
     public cleanupObstacles(activeIds: Set<string>) {
         const toDelete: string[] = []; for (const id of this.obstacles.keys()) { if (this.pendingObstacles.has(id)) continue; if (!activeIds.has(id)) toDelete.push(id); }
         toDelete.forEach(id => {

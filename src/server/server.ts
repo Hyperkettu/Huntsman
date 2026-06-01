@@ -157,30 +157,32 @@ export class NetworkHackServer {
         this.serverSocket.onNewConnection({
             onConnect: () => {},
             onJoin: async (data: CredentialsData, socket: io.Socket) => {
-                console.log(`Player joined: ${socket.id}`);
+                console.log(`Player joined: ${socket.id} with role ${data.role}`);
                 
-                // Random position at the edges of the 25x25 ground
-                const edge = Math.floor(Math.random() * 4);
-                let startPos = { x: 0, y: 0.5, z: 0 };
-                const spread = (Math.random() - 0.5) * 22; // Spread along the edge
+                if (data.role !== 'display') {
+                    // Random position at the edges of the 25x25 ground
+                    const edge = Math.floor(Math.random() * 4);
+                    let startPos = { x: 0, y: 0.5, z: 0 };
+                    const spread = (Math.random() - 0.5) * 22; // Spread along the edge
 
-                if (edge === 0) startPos = { x: -11, y: 0.5, z: spread }; // Left
-                else if (edge === 1) startPos = { x: 11, y: 0.5, z: spread }; // Right
-                else if (edge === 2) startPos = { x: spread, y: 0.5, z: -11 }; // Top
-                else startPos = { x: spread, y: 0.5, z: 11 }; // Bottom
+                    if (edge === 0) startPos = { x: -11, y: 0.5, z: spread }; // Left
+                    else if (edge === 1) startPos = { x: 11, y: 0.5, z: spread }; // Right
+                    else if (edge === 2) startPos = { x: spread, y: 0.5, z: -11 }; // Top
+                    else startPos = { x: spread, y: 0.5, z: 11 }; // Bottom
 
-                const player: PlayerState = {
-                    id: socket.id,
-                    position: startPos,
-                    quaternion: { x: 0, y: 0, z: 0, w: 1 },
-                    color: COLORS[this.colorIndex % COLORS.length] || 0xffffff
-                };
-                this.colorIndex++;
-                this.players.set(socket.id, player);
+                    const player: PlayerState = {
+                        id: socket.id,
+                        position: startPos,
+                        quaternion: { x: 0, y: 0, z: 0, w: 1 },
+                        color: COLORS[this.colorIndex % COLORS.length] || 0xffffff
+                    };
+                    this.colorIndex++;
+                    this.players.set(socket.id, player);
 
-                if (data.role === 'catcher') {
-                    this.catcherId = socket.id;
-                    console.log(`Manual catcher assigned: ${socket.id}`);
+                    if (data.role === 'catcher') {
+                        this.catcherId = socket.id;
+                        console.log(`Manual catcher assigned: ${socket.id}`);
+                    }
                 }
 
                 if (this.serverSocket) {
@@ -190,7 +192,9 @@ export class NetworkHackServer {
                     });
                 }
 
-                this.broadcastGameState();
+                if (data.role !== 'display') {
+                    this.broadcastGameState();
+                }
                 
                 socket.on('start-game', () => {
                     if (this.inLobby) {
@@ -440,7 +444,7 @@ export class NetworkHackServer {
        this.app!.use(cors({ credentials: false }));
        const publicPath = this.getPublicPath();
        this.app!.use(express.static(publicPath));
-       this.app!.get([Routes.HOME, Routes.PLAYER, Routes.CATCHER, Routes.CATCHER_VIEW], (req, res) => {
+       this.app!.get([Routes.HOME, Routes.PLAYER, Routes.CATCHER, Routes.CATCHER_VIEW, Routes.EDITOR], (req, res) => {
             res.sendFile(path.join(publicPath, 'index.html'));
        });
     }

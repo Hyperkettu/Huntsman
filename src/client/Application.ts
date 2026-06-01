@@ -12,7 +12,7 @@ enum AppMode {
 
 export class Application {
     private renderer: Renderer;
-    private editor: SceneEditor;
+    private editor?: SceneEditor;
     private socket: Socket;
     private mode: AppMode;
     private role: 'player' | 'catcher' | 'display' | 'catcher-view' = 'display';
@@ -30,7 +30,9 @@ export class Application {
     private gameStatusText!: HTMLDivElement;
     private lobbyContainer!: HTMLDivElement;
     private gameOverOverlay!: HTMLDivElement;
+    private editorOverlay!: HTMLDivElement;
     private inLobby: boolean = true;
+    private isEditorView: boolean = false;
     
     private joystickContainer!: HTMLDivElement;
     private joystickRenderer: THREE.WebGLRenderer | undefined;
@@ -72,6 +74,10 @@ export class Application {
         } else if (window.location.pathname === '/catcher-view') {
             this.mode = AppMode.CATCHER_VIEW;
             this.role = 'catcher-view';
+        } else if (window.location.pathname === '/editor') {
+            this.mode = AppMode.DISPLAY;
+            this.role = 'display';
+            this.isEditorView = true;
         } else {
             this.mode = AppMode.DISPLAY;
             this.role = 'display';
@@ -86,11 +92,16 @@ export class Application {
             this.backgroundMusic.preload = 'auto';
         }
         this.socket = io();
-        this.editor = new SceneEditor(this.renderer, this.socket);
+        if (this.isEditorView) {
+            this.editor = new SceneEditor(this.renderer, this.socket);
+        }
         this.createLobbyUI();
         this.createGameOverUI();
         this.setupBackgroundMusic();
-        if (this.mode === AppMode.DISPLAY || this.mode === AppMode.CATCHER_VIEW) {
+        if (this.isEditorView) {
+            this.createEditorUI();
+            this.createGameUI();
+        } else if (this.mode === AppMode.DISPLAY || this.mode === AppMode.CATCHER_VIEW) {
             this.createGameUI();
         } else {
             this.createJoystickUI();
@@ -104,7 +115,7 @@ export class Application {
 
     private setupSocket() {
         this.socket.on('connect', () => {
-            if (this.mode === AppMode.PLAYER) {
+            if (this.mode === AppMode.PLAYER || this.isEditorView) {
                 this.socket.emit('private-join', { role: this.role });
             }
         });
@@ -151,6 +162,26 @@ export class Application {
         this.statusContainer = container;
     }
 
+    private createEditorUI() {
+        const overlay = document.createElement('div');
+        overlay.id = 'editor-overlay';
+        overlay.style.position = 'absolute';
+        overlay.style.left = '16px';
+        overlay.style.bottom = '16px';
+        overlay.style.zIndex = '250';
+        overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.75)';
+        overlay.style.color = '#fff';
+        overlay.style.fontFamily = 'Arial, sans-serif';
+        overlay.style.fontSize = '14px';
+        overlay.style.padding = '14px 16px';
+        overlay.style.borderRadius = '12px';
+        overlay.style.maxWidth = '360px';
+        overlay.style.lineHeight = '1.5';
+        overlay.innerHTML = '<strong>Editor Mode</strong><br>Click obstacles to select, use arrow keys to move, U/J/I/K/O/L to scale, N to add obstacle, T to add teleport pair.';
+        document.body.appendChild(overlay);
+        this.editorOverlay = overlay;
+    }
+
     private createLobbyUI() {
         const container = document.createElement('div');
         container.id = 'lobby-container';
@@ -195,6 +226,9 @@ export class Application {
         container.appendChild(startButton);
         document.body.appendChild(container);
         this.lobbyContainer = container;
+        if (this.isEditorView) {
+            this.lobbyContainer.style.display = 'none';
+        }
     }
 
     private createJoystickUI() {
@@ -232,8 +266,17 @@ export class Application {
         this.joystickKnob.position.set(center.x, center.y, 0);
         const handleTouch = (e: TouchEvent | MouseEvent) => {
             if (!this.isTouchingJoystick || !this.joystickBase || !this.joystickKnob) return;
-            const clientX = 'touches' in e ? e.touches[0].clientX : (e as MouseEvent).clientX;
-            const clientY = 'touches' in e ? e.touches[0].clientY : (e as MouseEvent).clientY;
+            let clientX: number;
+            let clientY: number;
+            if ('touches' in e) {
+                const touch = e.touches[0];
+                if (!touch) return;
+                clientX = touch.clientX;
+                clientY = touch.clientY;
+            } else {
+                clientX = e.clientX;
+                clientY = e.clientY;
+            }
             const rect = this.joystickContainer.getBoundingClientRect();
             const touchX = clientX - rect.left - width/2;
             const touchY = -(clientY - rect.top - height/2);
@@ -507,18 +550,25 @@ export class Application {
         this.isGameOver = !!state.isGameOver;
         this.catcherId = state.catcherId || null;
         this.caughtPlayerIds = new Set(state.caughtPlayerIds || []);
-        if (!this.isGameOver) {
-            const elapsedSeconds = this.serverStartTime ? Math.floor((Date.now() - this.serverStartTime) / 1000) : 0;
-            this.timerText.textContent = `Time: ${elapsedSeconds}s`;
-        }
-        this.gameStatusText.innerHTML = '';
-        if (this.isGameOver) {
-            this.gameOverOverlay.style.display = 'block';
-            const timerElem = document.getElementById('game-over-timer');
-            if (timerElem) timerElem.textContent = `Final Time: ${this.timerText.textContent.split(': ')[1] || '0s'}. Returning to lobby...`;
-        } else {
+        
+        if (this.isEditorView) {
+            this.timerText.textContent = 'Time: ∞';
             this.gameOverOverlay.style.display = 'none';
+        } else {
+            if (!this.isGameOver) {
+                const elapsedSeconds = this.serverStartTime ? Math.floor((Date.now() - this.serverStartTime) / 1000) : 0;
+                this.timerText.textContent = `Time: ${elapsedSeconds}s`;
+            }
+            if (this.isGameOver) {
+                this.gameOverOverlay.style.display = 'block';
+                const timerElem = document.getElementById('game-over-timer');
+                if (timerElem) timerElem.textContent = `Final Time: ${this.timerText.textContent.split(': ')[1] || '0s'}. Returning to lobby...`;
+            } else {
+                this.gameOverOverlay.style.display = 'none';
+            }
         }
+        
+        this.gameStatusText.innerHTML = '';
         if (this.catcherId) {
             const catcherPlayer = state.players.find(p => p.id === this.catcherId);
             const catcherName = (catcherPlayer && catcherPlayer.name) || `Player ${this.catcherId.substring(0, 4)}`;
@@ -565,7 +615,16 @@ export class Application {
         this.catcherId = state.catcherId || null;
         this.caughtPlayerIds = new Set(state.caughtPlayerIds || []);
         
-        if (this.inLobby) {
+        if (this.isEditorView) {
+            this.lobbyContainer.style.display = 'none';
+            if (this.statusContainer) this.statusContainer.style.display = 'block';
+            if (this.joystickContainer) this.joystickContainer.style.display = 'none';
+            const boostUI = document.getElementById('boost-ui-container');
+            if (boostUI) boostUI.style.display = 'none';
+            if (this.editorOverlay) this.editorOverlay.style.display = 'block';
+            this.gameOverOverlay.style.display = 'none';
+            this.updateGameUI(state);
+        } else if (this.inLobby) {
             this.lobbyContainer.style.display = 'block';
             if (this.statusContainer) this.statusContainer.style.display = 'none';
             if (this.joystickContainer) this.joystickContainer.style.display = 'none';
@@ -668,7 +727,9 @@ export class Application {
         }
 
         if (this.mode === AppMode.DISPLAY || this.mode === AppMode.CATCHER_VIEW) {
-            if (this.serverStartTime && !this.isGameOver) {
+            if (this.isEditorView) {
+                if (this.timerText) this.timerText.textContent = 'Time: ∞';
+            } else if (this.serverStartTime && !this.isGameOver) {
                 const elapsedSeconds = Math.floor((Date.now() - this.serverStartTime) / 1000);
                 if (this.timerText) this.timerText.textContent = `Time: ${elapsedSeconds}s`;
             }

@@ -5,4 +5,5 @@ export class Routes {
     static PLAYER = '/player';
     static CATCHER = '/catcher';
     static CATCHER_VIEW = '/catcher-view';
+    static EDITOR = '/editor';
 }
