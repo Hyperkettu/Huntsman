@@ -122,19 +122,22 @@ export class NetworkHackServer {
             this.collectibles.set(id, {
                 id,
                 position: {
-                    x: (Math.random() - 0.5) * 40,
-                    y: 20, // Start high
-                    z: (Math.random() - 0.5) * 40
+                    x: (Math.random() - 0.5) * 45,
+                    y: 25, // Start high
+                    z: (Math.random() - 0.5) * 45
                 }
             });
+            console.log(`Spawned collectible ${id}`);
         }
 
         const toDelete: string[] = [];
         this.collectibles.forEach((c, id) => {
+            const landingY = this.getLandingHeight(c.position.x, c.position.z);
+            
             // Fall
-            if (c.position.y > 0.5) {
-                c.position.y -= 5 * deltaTime; // Fall speed
-                if (c.position.y < 0.5) c.position.y = 0.5;
+            if (c.position.y > landingY) {
+                c.position.y -= 7 * deltaTime; // Fall speed
+                if (c.position.y < landingY) c.position.y = landingY;
             }
 
             // Check pickup
@@ -146,7 +149,7 @@ export class NetworkHackServer {
                 const dz = p.position.z - c.position.z;
                 const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-                if (dist < 1.5) {
+                if (dist < 1.8) { // Larger pickup radius
                     p.ammo = (p.ammo || 0) + 1;
                     toDelete.push(id);
                     console.log(`Player ${pid} picked up collectible! Ammo: ${p.ammo}`);
@@ -155,6 +158,23 @@ export class NetworkHackServer {
         });
 
         toDelete.forEach(id => this.collectibles.delete(id));
+    }
+
+    private getLandingHeight(x: number, z: number): number {
+        let maxHeight = 0.5; // Floor height
+        this.obstacles.forEach(o => {
+            if (o.isTeleport) return;
+            const halfX = Math.abs(o.scale.x) / 2;
+            const halfZ = Math.abs(o.scale.z) / 2;
+            const dx = Math.abs(x - o.position.x);
+            const dz = Math.abs(z - o.position.z);
+            
+            if (dx <= halfX && dz <= halfZ) {
+                const top = o.position.y + Math.abs(o.scale.y) / 2;
+                if (top > maxHeight) maxHeight = top;
+            }
+        });
+        return maxHeight;
     }
 
     private getPublicPath(): string {
@@ -506,7 +526,8 @@ export class NetworkHackServer {
 
     private broadcastGameState(): void {
         if (this.serverSocket) {
-            this.serverSocket.broadcast(this.getGameState() as any);
+            const state = this.getGameState();
+            this.serverSocket.broadcast(state as any);
         }
     }
 

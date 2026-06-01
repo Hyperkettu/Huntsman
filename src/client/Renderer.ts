@@ -289,23 +289,33 @@ export class Renderer {
         collectibles.forEach(c => {
             let mesh = this.collectibles.get(c.id);
             if (!mesh) {
+                // Larger geometry and more vibrant material
                 mesh = new THREE.Mesh(
-                    new THREE.IcosahedronGeometry(0.4, 0),
+                    new THREE.IcosahedronGeometry(0.8, 0),
                     new THREE.MeshStandardMaterial({ 
-                        color: 0xffd700, 
-                        roughness: 0.1, 
-                        metalness: 0.8,
-                        emissive: 0xffd700,
-                        emissiveIntensity: 0.5
+                        color: 0xffcc00, 
+                        roughness: 0.05, 
+                        metalness: 0.9,
+                        emissive: 0xffaa00,
+                        emissiveIntensity: 1.0
                     })
                 );
+                // Stronger point light for visibility
+                const light = new THREE.PointLight(0xffaa00, 2.0, 10);
+                mesh.add(light);
+                
                 this.scene.add(mesh);
                 this.collectibles.set(c.id, mesh);
+                console.log(`Renderer: Created mesh for collectible ${c.id} at y=${c.position.y}`);
             }
             mesh.position.set(c.position.x, c.position.y, c.position.z);
         });
         this.collectibles.forEach((mesh, id) => {
-            if (!currentIds.has(id)) { this.scene.remove(mesh); this.collectibles.delete(id); }
+            if (!currentIds.has(id)) { 
+                this.scene.remove(mesh); 
+                this.collectibles.delete(id); 
+                console.log(`Renderer: Removed mesh for collectible ${id}`);
+            }
         });
     }
 
@@ -313,13 +323,22 @@ export class Renderer {
         // Pulse collectibles
         const time = Date.now() * 0.005;
         this.collectibles.forEach(mesh => {
-            mesh.rotation.y += 0.02;
-            mesh.rotation.x += 0.01;
+            mesh.rotation.y += 0.04; // Faster rotation
+            mesh.rotation.x += 0.02;
             const material = mesh.material as THREE.MeshStandardMaterial;
-            material.emissiveIntensity = 0.5 + Math.sin(time) * 0.5;
+            // Stronger pulsing
+            material.emissiveIntensity = 1.0 + Math.sin(time * 2) * 0.8;
+            
+            // Pulse the attached light too
+            const light = mesh.children[0] as THREE.PointLight;
+            if (light) light.intensity = 1.0 + Math.sin(time * 2) * 0.5;
         });
 
         this.renderer.render(this.scene, this.camera);
+    }
+
+    public setCatcherSlowed(until: number) {
+        this.catcherSlowedUntil = until;
     }
 
     public getCatcherSlowedUntil() {

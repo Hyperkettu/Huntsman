@@ -125,6 +125,16 @@ export class Application {
             this.myId = data.yourId;
             this.renderer.setMyId(data.yourId);
             this.handleGameState(data.gameState);
+            
+            // Re-run alignment logic immediately
+            const boostUI = document.getElementById('boost-ui-container');
+            if (boostUI && !this.inLobby && !this.isGameOver) {
+                const isCatcher = this.myId === this.catcherId;
+                if (this.boostButton) this.boostButton.style.display = isCatcher ? 'block' : 'none';
+                if (this.staminaBarContainer) this.staminaBarContainer.style.display = isCatcher ? 'block' : 'none';
+                if (this.shootButton) this.shootButton.style.display = !isCatcher ? 'block' : 'none';
+                if (this.ammoText) this.ammoText.style.display = !isCatcher ? 'block' : 'none';
+            }
         });
         this.socket.on('broadcast', (state: GameState) => {
             this.handleGameState(state);
@@ -659,6 +669,11 @@ export class Application {
                 if (boostUI) {
                     boostUI.style.display = 'flex';
                     const isCatcher = this.myId === this.catcherId;
+                    
+                    // Update role locally based on server state to ensure movement logic works
+                    if (isCatcher) this.role = 'catcher';
+                    else if (this.role === 'catcher') this.role = 'player';
+
                     if (this.boostButton) this.boostButton.style.display = isCatcher ? 'block' : 'none';
                     if (this.staminaBarContainer) this.staminaBarContainer.style.display = isCatcher ? 'block' : 'none';
                     if (this.shootButton) this.shootButton.style.display = !isCatcher ? 'block' : 'none';
@@ -681,10 +696,11 @@ export class Application {
                 const cube = this.renderer.getCube(p.id);
                 if (isLocal) {
                     const needsInit = !cube;
+                    // For local player, if they were moved by the server (e.g. at start of game), teleport them
                     if (cube && this.teleportGracePeriod <= 0) {
-                        const dist = new THREE.Vector3(p.position.x, p.position.y, p.position.z).distanceTo(cube.position);
-                        if (dist > 5.0) {
-                            this.renderer.teleportPlayer(p.id, new THREE.Vector3(p.position.x, p.position.y, p.position.z));
+                        const serverPos = new THREE.Vector3(p.position.x, p.position.y, p.position.z);
+                        if (serverPos.distanceTo(cube.position) > 4.0) {
+                            this.renderer.teleportPlayer(p.id, serverPos);
                         }
                     }
                     this.renderer.updatePlayer(p.id, needsInit ? p.position : undefined, needsInit ? p.quaternion : undefined, p.color, p.name);
@@ -713,12 +729,10 @@ export class Application {
         }
 
         this.renderer.setCatcherSlowed(state.catcherSlowedUntil || 0);
-        if (state.projectiles) {
-            this.renderer.updateProjectiles(state.projectiles);
-        }
-        if (state.collectibles) {
-            this.renderer.updateCollectibles(state.collectibles);
-        }
+        
+        // Ensure projectiles and collectibles are updated regardless of mode
+        if (state.projectiles) this.renderer.updateProjectiles(state.projectiles);
+        if (state.collectibles) this.renderer.updateCollectibles(state.collectibles);
 
         const myPlayer = state.players.find(p => p.id === this.myId);
         if (myPlayer) {
@@ -777,11 +791,11 @@ export class Application {
                 this.players.forEach(id => this.renderer.setPlayerVisibility(id, true));
             }
         } else if (this.myId) {
-            const myCaught = (this.myId && this.caughtPlayerIds.has(this.myId)) && this.myId !== this.catcherId;
+            const isCatcher = this.myId === this.catcherId;
+            const myCaught = !isCatcher && this.caughtPlayerIds.has(this.myId);
             const canMove = !this.inLobby && !this.isGameOver && !myCaught;
             
             const cube = this.renderer.getCube(this.myId!);
-            const posBefore = cube ? cube.position.clone() : null;
 
             if (canMove) {
                 this.updateStamina(deltaTime);
@@ -923,8 +937,17 @@ export class Application {
 
     private updateCamera() {
         const cam = this.renderer.getCamera();
-        cam.position.lerp(new THREE.Vector3(0, 30, 30), 0.05);
-        cam.lookAt(0, 0, 0);
+        const targetPos = new THREE.Vector3(0, 0, 0);
+        
+        if (this.mode === AppMode.CATCHER_VIEW && this.catcherId) {
+            const catcherCube = this.renderer.getCube(this.catcherId);
+            if (catcherCube) {
+                targetPos.copy(catcherCube.position);
+            }
+        }
+        
+        cam.position.lerp(new THREE.Vector3(targetPos.x, targetPos.y + 30, targetPos.z + 30), 0.05);
+        cam.lookAt(targetPos);
     }
 
     private syncToServer(cube: THREE.Object3D) {
