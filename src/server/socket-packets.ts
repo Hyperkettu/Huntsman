@@ -30,6 +30,7 @@ export interface PlayerState {
     position: Vector3;
     quaternion: Quaternion;
     color: number;
+    ammo?: number;
 }
 
 export interface ObstacleState {
@@ -46,10 +47,16 @@ export interface ProjectileState {
     position: Vector3;
 }
 
+export interface CollectibleState {
+    id: string;
+    position: Vector3;
+}
+
 export interface GameState {
     players: PlayerState[];
     obstacles: ObstacleState[];
     projectiles?: ProjectileState[];
+    collectibles?: CollectibleState[];
     catcherId?: string;
     catcherSlowedUntil?: number;
     caughtPlayerIds?: string[];

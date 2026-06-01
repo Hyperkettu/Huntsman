@@ -26,6 +26,7 @@ export class Application {
     
     private statusContainer!: HTMLDivElement;
     private timerText!: HTMLDivElement;
+    private ammoText!: HTMLDivElement;
     private caughtList!: HTMLDivElement;
     private gameStatusText!: HTMLDivElement;
     private lobbyContainer!: HTMLDivElement;
@@ -50,6 +51,7 @@ export class Application {
     private stamina: number = 100;
     private maxStamina: number = 100;
     private isBoosting: boolean = false;
+    private currentAmmo: number = 0;
     private staminaBarContainer!: HTMLDivElement;
     private staminaBarFill!: HTMLDivElement;
     private boostButton!: HTMLButtonElement;
@@ -145,6 +147,10 @@ export class Application {
         this.timerText.style.marginBottom = '8px';
         this.timerText.textContent = 'Time: 0s';
         container.appendChild(this.timerText);
+        this.ammoText = document.createElement('div');
+        this.ammoText.style.marginBottom = '8px';
+        this.ammoText.textContent = 'Ammo: 0';
+        container.appendChild(this.ammoText);
         this.gameStatusText = document.createElement('div');
         this.gameStatusText.style.marginBottom = '8px';
         this.gameStatusText.style.fontWeight = '600';
@@ -332,6 +338,14 @@ export class Application {
         container.style.gap = '20px';
         container.style.zIndex = '200';
         document.body.appendChild(container);
+
+        this.ammoText = document.createElement('div');
+        this.ammoText.style.color = '#fff';
+        this.ammoText.style.fontSize = '24px';
+        this.ammoText.style.fontWeight = 'bold';
+        this.ammoText.style.textShadow = '0 0 10px rgba(0,0,0,0.8)';
+        this.ammoText.textContent = 'AMMO: 0';
+        container.appendChild(this.ammoText);
 
         this.shootButton = document.createElement('button');
         this.shootButton.textContent = 'SHOOT';
@@ -644,9 +658,11 @@ export class Application {
                 const boostUI = document.getElementById('boost-ui-container');
                 if (boostUI) {
                     boostUI.style.display = 'flex';
-                    if (this.boostButton) this.boostButton.style.display = this.myId === this.catcherId ? 'block' : 'none';
-                    if (this.staminaBarContainer) this.staminaBarContainer.style.display = this.myId === this.catcherId ? 'block' : 'none';
-                    if (this.shootButton) this.shootButton.style.display = this.myId !== this.catcherId ? 'block' : 'none';
+                    const isCatcher = this.myId === this.catcherId;
+                    if (this.boostButton) this.boostButton.style.display = isCatcher ? 'block' : 'none';
+                    if (this.staminaBarContainer) this.staminaBarContainer.style.display = isCatcher ? 'block' : 'none';
+                    if (this.shootButton) this.shootButton.style.display = !isCatcher ? 'block' : 'none';
+                    if (this.ammoText) this.ammoText.style.display = !isCatcher ? 'block' : 'none';
                 }
                 this.gameOverOverlay.style.display = this.isGameOver ? 'block' : 'none';
             }
@@ -700,6 +716,17 @@ export class Application {
         if (state.projectiles) {
             this.renderer.updateProjectiles(state.projectiles);
         }
+        if (state.collectibles) {
+            this.renderer.updateCollectibles(state.collectibles);
+        }
+
+        const myPlayer = state.players.find(p => p.id === this.myId);
+        if (myPlayer) {
+            this.currentAmmo = myPlayer.ammo || 0;
+            if (this.ammoText) {
+                this.ammoText.textContent = `AMMO: ${this.currentAmmo}`;
+            }
+        }
     }
 
     private update(timestamp: number) {
@@ -721,9 +748,12 @@ export class Application {
                 this.shootButton.textContent = `COOLDOWN (${Math.ceil(this.shootCooldown)}s)`;
             }
         } else if (this.shootButton) {
-            this.shootButton.style.opacity = '1.0';
-            this.shootButton.disabled = false;
-            this.shootButton.textContent = 'SHOOT';
+            const hasAmmo = this.currentAmmo > 0;
+            this.shootButton.style.opacity = hasAmmo ? '1.0' : '0.4';
+            this.shootButton.disabled = !hasAmmo;
+            this.shootButton.textContent = hasAmmo ? 'SHOOT' : 'NO AMMO';
+            this.shootButton.style.backgroundColor = hasAmmo ? '#4444ff' : '#444';
+            this.shootButton.style.boxShadow = hasAmmo ? '0 0 25px rgba(0,0,255,0.6)' : 'none';
         }
 
         if (this.mode === AppMode.DISPLAY || this.mode === AppMode.CATCHER_VIEW) {

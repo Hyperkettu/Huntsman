@@ -36,7 +36,11 @@ export class NetworkHackServer {
     private projectiles: Map<string, { id: string, position: Vector3, velocity: Vector3 }> = new Map();
     private projectileCounter: number = 0;
     private catcherSlowedUntil: number = 0;
-    private projectileUpdateInterval?: any;
+    private updateInterval?: any;
+    
+    private collectibles: Map<string, { id: string, position: Vector3 }> = new Map();
+    private collectibleCounter: number = 0;
+    private lastCollectibleSpawn: number = 0;
 
     constructor() {
         this.createApp();
@@ -46,15 +50,29 @@ export class NetworkHackServer {
         this.initializeWebSockets();    
         this.initializeBackendServices();
         this.listen();
-        this.startProjectileLoop();
+        this.startUpdateLoop();
     }
 
-    private startProjectileLoop() {
-        if (this.projectileUpdateInterval) clearInterval(this.projectileUpdateInterval);
-        this.projectileUpdateInterval = setInterval(() => {
-            if (this.projectiles.size === 0 && this.catcherSlowedUntil < Date.now()) return;
-            this.updateProjectiles();
-        }, 50); // 20 FPS for projectiles
+    private startUpdateLoop() {
+        if (this.updateInterval) clearInterval(this.updateInterval);
+        this.updateInterval = setInterval(() => {
+            const hasProjectiles = this.projectiles.size > 0;
+            const hasFallingCollectibles = Array.from(this.collectibles.values()).some(c => c.position.y > 0.5);
+            const needsSlowUpdate = this.catcherSlowedUntil > Date.now();
+            
+            // Always run if game is active to handle collectible spawning
+            if (!this.inLobby && !this.isGameOver) {
+                this.updateGame();
+            } else if (hasProjectiles || needsSlowUpdate || hasFallingCollectibles) {
+                this.updateGame();
+            }
+        }, 50); // 20 FPS
+    }
+
+    private updateGame() {
+        this.updateProjectiles();
+        this.updateCollectibles();
+        this.broadcastGameState();
     }
 
     private updateProjectiles() {
@@ -91,7 +109,52 @@ export class NetworkHackServer {
         });
 
         toDelete.forEach(id => this.projectiles.delete(id));
-        this.broadcastGameState();
+    }
+
+    private updateCollectibles() {
+        const now = Date.now();
+        const deltaTime = 0.05;
+
+        // Spawn logic
+        if (!this.inLobby && !this.isGameOver && now - this.lastCollectibleSpawn > 2000) { // Every 2 seconds
+            this.lastCollectibleSpawn = now;
+            const id = `collectible_${this.collectibleCounter++}`;
+            this.collectibles.set(id, {
+                id,
+                position: {
+                    x: (Math.random() - 0.5) * 40,
+                    y: 20, // Start high
+                    z: (Math.random() - 0.5) * 40
+                }
+            });
+        }
+
+        const toDelete: string[] = [];
+        this.collectibles.forEach((c, id) => {
+            // Fall
+            if (c.position.y > 0.5) {
+                c.position.y -= 5 * deltaTime; // Fall speed
+                if (c.position.y < 0.5) c.position.y = 0.5;
+            }
+
+            // Check pickup
+            this.players.forEach((p, pid) => {
+                if (pid === this.catcherId || this.isPlayerCaught(pid)) return;
+
+                const dx = p.position.x - c.position.x;
+                const dy = p.position.y - c.position.y;
+                const dz = p.position.z - c.position.z;
+                const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+
+                if (dist < 1.5) {
+                    p.ammo = (p.ammo || 0) + 1;
+                    toDelete.push(id);
+                    console.log(`Player ${pid} picked up collectible! Ammo: ${p.ammo}`);
+                }
+            });
+        });
+
+        toDelete.forEach(id => this.collectibles.delete(id));
     }
 
     private getPublicPath(): string {
@@ -259,7 +322,8 @@ export class NetworkHackServer {
 
                 socket.on('shoot', (data: ShootEvent) => {
                     const p = this.players.get(socket.id);
-                    if (p && !this.isPlayerCaught(socket.id) && socket.id !== this.catcherId) {
+                    if (p && !this.isPlayerCaught(socket.id) && socket.id !== this.catcherId && (p.ammo || 0) > 0) {
+                        p.ammo = (p.ammo || 0) - 1;
                         const id = `projectile_${this.projectileCounter++}`;
                         const speed = 25;
                         const velocity = {
@@ -272,7 +336,7 @@ export class NetworkHackServer {
                             position: { ...data.position, y: 0.5 },
                             velocity
                         });
-                        console.log(`Player ${socket.id} shot!`);
+                        console.log(`Player ${socket.id} shot! Ammo remaining: ${p.ammo}`);
                     }
                 });
             },
@@ -309,6 +373,10 @@ export class NetworkHackServer {
                 id: p.id,
                 position: p.position
             })),
+            collectibles: Array.from(this.collectibles.values()).map(c => ({
+                id: c.id,
+                position: c.position
+            })),
             catcherId: this.catcherId || undefined,
             catcherSlowedUntil: this.catcherSlowedUntil,
             caughtPlayerIds: Array.from(this.caughtPlayerIds),
@@ -324,6 +392,8 @@ export class NetworkHackServer {
         this.isGameOver = false;
         this.startTime = Date.now();
         this.caughtPlayerIds.clear();
+        this.collectibles.clear();
+        this.lastCollectibleSpawn = 0;
         
         if (this.singlePlayerTimer) {
             clearTimeout(this.singlePlayerTimer);
@@ -350,6 +420,7 @@ export class NetworkHackServer {
 
         // Randomize player positions at start of game
         this.players.forEach(p => {
+            p.ammo = 0;
             const edge = Math.floor(Math.random() * 4);
             const spread = (Math.random() - 0.5) * 45;
             if (edge === 0) p.position = { x: -22, y: 0.5, z: spread };

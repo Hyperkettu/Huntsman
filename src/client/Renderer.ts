@@ -27,6 +27,7 @@ export class Renderer {
     private targetQuaternions: Map<string, THREE.Quaternion> = new Map();
 
     private projectiles: Map<string, THREE.Mesh> = new Map();
+    private collectibles: Map<string, THREE.Mesh> = new Map();
     private catcherSlowedUntil: number = 0;
 
     constructor() {
@@ -283,8 +284,42 @@ export class Renderer {
         });
     }
 
-    public setCatcherSlowed(until: number) {
-        this.catcherSlowedUntil = until;
+    public updateCollectibles(collectibles: any[]) {
+        const currentIds = new Set(collectibles.map(c => c.id));
+        collectibles.forEach(c => {
+            let mesh = this.collectibles.get(c.id);
+            if (!mesh) {
+                mesh = new THREE.Mesh(
+                    new THREE.IcosahedronGeometry(0.4, 0),
+                    new THREE.MeshStandardMaterial({ 
+                        color: 0xffd700, 
+                        roughness: 0.1, 
+                        metalness: 0.8,
+                        emissive: 0xffd700,
+                        emissiveIntensity: 0.5
+                    })
+                );
+                this.scene.add(mesh);
+                this.collectibles.set(c.id, mesh);
+            }
+            mesh.position.set(c.position.x, c.position.y, c.position.z);
+        });
+        this.collectibles.forEach((mesh, id) => {
+            if (!currentIds.has(id)) { this.scene.remove(mesh); this.collectibles.delete(id); }
+        });
+    }
+
+    public render() {
+        // Pulse collectibles
+        const time = Date.now() * 0.005;
+        this.collectibles.forEach(mesh => {
+            mesh.rotation.y += 0.02;
+            mesh.rotation.x += 0.01;
+            const material = mesh.material as THREE.MeshStandardMaterial;
+            material.emissiveIntensity = 0.5 + Math.sin(time) * 0.5;
+        });
+
+        this.renderer.render(this.scene, this.camera);
     }
 
     public getCatcherSlowedUntil() {
@@ -302,8 +337,8 @@ export class Renderer {
             this.world.createCollider(colliderDesc, body);
             this.playerBodies.set(id, body);
         } else {
-            const collider = body.collider(0); const shape = collider.shape() as any;
-            if (shape && shape.radius && Math.abs(shape.radius - 0.5 * scale) > 0.01) {
+            const collider = body.collider(0);
+            if (collider && Math.abs(collider.radius() - 0.5 * scale) > 0.01) {
                 this.world.removeCollider(collider, false);
                 const colliderDesc = RAPIER.ColliderDesc.ball(0.5 * scale);
                 this.world.createCollider(colliderDesc, body);
@@ -515,7 +550,6 @@ export class Renderer {
     }
 
     public isPhysicsReady(): boolean { return this.physicsInitialized && !!this.world; }
-    public render() { this.renderer.render(this.scene, this.camera); }
 
     public checkCollision(position: THREE.Vector3): boolean {
         if (!this.world || !this.physicsInitialized) return false;
