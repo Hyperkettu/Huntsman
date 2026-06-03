@@ -28,6 +28,7 @@ export class Renderer {
 
     private projectiles: Map<string, THREE.Mesh> = new Map();
     private collectibles: Map<string, THREE.Mesh> = new Map();
+    private jailAreaMesh: THREE.Mesh | null = null;
     private catcherSlowedUntil: number = 0;
 
     constructor() {
@@ -319,6 +320,36 @@ export class Renderer {
         });
     }
 
+    public updateJailArea(jailArea?: { position: any, scale: any }) {
+        if (!jailArea) {
+            if (this.jailAreaMesh) {
+                this.scene.remove(this.jailAreaMesh);
+                this.jailAreaMesh = null;
+            }
+            return;
+        }
+
+        if (!this.jailAreaMesh) {
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            const material = new THREE.MeshStandardMaterial({ 
+                color: 0xff0000, 
+                transparent: true, 
+                opacity: 0.3,
+                emissive: 0xff0000,
+                emissiveIntensity: 0.2
+            });
+            this.jailAreaMesh = new THREE.Mesh(geometry, material);
+            this.scene.add(this.jailAreaMesh);
+        }
+
+        this.jailAreaMesh.position.set(jailArea.position.x, jailArea.position.y, jailArea.position.z);
+        this.jailAreaMesh.scale.set(jailArea.scale.x, jailArea.scale.y, jailArea.scale.z);
+    }
+
+    public getJailMesh() {
+        return this.jailAreaMesh;
+    }
+
     public render() {
         // Pulse collectibles
         const time = Date.now() * 0.005;
@@ -377,6 +408,8 @@ export class Renderer {
         const pairId = (extra && extra.pairId) || "";
         const color = (extra && extra.color) !== undefined ? extra.color : (isTeleport ? 0x00ffff : 0x888888);
 
+        let changed = false;
+
         if (!obstacle) {
             const geometry = isTeleport ? new THREE.CylinderGeometry(1, 1, 0.1, 32) : new THREE.BoxGeometry(1, 1, 1);
             const material = new THREE.MeshStandardMaterial({ 
@@ -392,12 +425,26 @@ export class Renderer {
             obstacle.receiveShadow = true;
             this.scene.add(obstacle);
             this.obstacles.set(id, obstacle);
+            changed = true;
         }
 
-        if (position) obstacle.position.set(position.x, position.y, position.z);
-        if (scale) obstacle.scale.set(scale.x, scale.y, scale.z);
+        if (position) {
+            if (obstacle.position.x !== position.x || obstacle.position.y !== position.y || obstacle.position.z !== position.z) {
+                obstacle.position.set(position.x, position.y, position.z);
+                changed = true;
+            }
+        }
+        if (scale) {
+            if (obstacle.scale.x !== scale.x || obstacle.scale.y !== scale.y || obstacle.scale.z !== scale.z) {
+                obstacle.scale.set(scale.x, scale.y, scale.z);
+                changed = true;
+            }
+        }
         
-        obstacle.userData.isTeleport = isTeleport;
+        if (obstacle.userData.isTeleport !== isTeleport) {
+            obstacle.userData.isTeleport = isTeleport;
+            changed = true;
+        }
         obstacle.userData.pairId = pairId;
         obstacle.userData.color = color;
 
@@ -416,7 +463,7 @@ export class Renderer {
             this.teleportRegistry.delete(id);
         }
 
-        if (this.physicsInitialized) {
+        if (changed && this.physicsInitialized) {
             this.updateObstacleCollider(id, obstacle);
         }
     }

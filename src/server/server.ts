@@ -42,6 +42,11 @@ export class NetworkHackServer {
     private collectibleCounter: number = 0;
     private lastCollectibleSpawn: number = 0;
 
+    private jailArea: { position: Vector3, scale: Vector3 } = { 
+        position: { x: 0, y: 0.25, z: 0 }, 
+        scale: { x: 5, y: 0.5, z: 5 } 
+    };
+
     constructor() {
         this.createApp();
         this.configure();
@@ -115,29 +120,29 @@ export class NetworkHackServer {
         const now = Date.now();
         const deltaTime = 0.05;
 
-        // Spawn logic
-        if (!this.inLobby && !this.isGameOver && now - this.lastCollectibleSpawn > 2000) { // Every 2 seconds
+        // Spawn logic: Max 6 collectibles
+        if (!this.inLobby && !this.isGameOver && this.collectibles.size < 6 && now - this.lastCollectibleSpawn > 2000) {
             this.lastCollectibleSpawn = now;
             const id = `collectible_${this.collectibleCounter++}`;
+            const x = (Math.random() - 0.5) * 45;
+            const z = (Math.random() - 0.5) * 45;
+            const landingY = this.getLandingHeight(x, z);
+            
             this.collectibles.set(id, {
                 id,
-                position: {
-                    x: (Math.random() - 0.5) * 45,
-                    y: 25, // Start high
-                    z: (Math.random() - 0.5) * 45
-                }
-            });
-            console.log(`Spawned collectible ${id}`);
+                position: { x, y: 25, z },
+                // Store landingY locally in the object to avoid recalculating every frame
+                landingY: landingY 
+            } as any);
+            console.log(`Spawned collectible ${id} (Total: ${this.collectibles.size}/6)`);
         }
 
         const toDelete: string[] = [];
-        this.collectibles.forEach((c, id) => {
-            const landingY = this.getLandingHeight(c.position.x, c.position.z);
-            
-            // Fall
-            if (c.position.y > landingY) {
-                c.position.y -= 7 * deltaTime; // Fall speed
-                if (c.position.y < landingY) c.position.y = landingY;
+        this.collectibles.forEach((c: any, id) => {
+            // Fall using stored landingY
+            if (c.position.y > c.landingY) {
+                c.position.y -= 7 * deltaTime;
+                if (c.position.y < c.landingY) c.position.y = c.landingY;
             }
 
             // Check pickup
@@ -149,7 +154,7 @@ export class NetworkHackServer {
                 const dz = p.position.z - c.position.z;
                 const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
 
-                if (dist < 1.8) { // Larger pickup radius
+                if (dist < 1.8) {
                     p.ammo = (p.ammo || 0) + 1;
                     toDelete.push(id);
                     console.log(`Player ${pid} picked up collectible! Ammo: ${p.ammo}`);
@@ -196,13 +201,23 @@ export class NetworkHackServer {
         if (fs.existsSync(filePath)) {
             try {
                 const data = fs.readFileSync(filePath, 'utf8');
-                const obsArray = JSON.parse(data);
-                if (Array.isArray(obsArray)) {
-                    obsArray.forEach((obs: ObstacleState) => {
+                const config = JSON.parse(data);
+                
+                // Handle both old format (array) and new format (object with obstacles and jailArea)
+                if (Array.isArray(config)) {
+                    config.forEach((obs: ObstacleState) => {
                         if (obs.id) this.obstacles.set(obs.id, obs);
                     });
-                    console.log(`Successfully loaded ${this.obstacles.size} obstacles from ${filePath}`);
+                } else if (config.obstacles) {
+                    config.obstacles.forEach((obs: ObstacleState) => {
+                        if (obs.id) this.obstacles.set(obs.id, obs);
+                    });
+                    if (config.jailArea) {
+                        this.jailArea = config.jailArea;
+                        console.log("Loaded jailArea from scene.json");
+                    }
                 }
+                console.log(`Successfully loaded ${this.obstacles.size} obstacles from ${filePath}`);
             } catch (e) {
                 console.error(`Failed to load ${filePath}`, e);
             }
@@ -216,13 +231,18 @@ export class NetworkHackServer {
         try {
             const filePath = this.getSceneFilePath();
             const obsArray = Array.from(this.obstacles.values());
+            const sceneConfig = {
+                obstacles: obsArray,
+                jailArea: this.jailArea
+            };
+            
             // Ensure the directory exists before writing
             const dir = path.dirname(filePath);
-            console.log(`Saving scene with ${obsArray.length} obstacles to: ${filePath}`);
+            console.log(`Saving scene with ${obsArray.length} obstacles and jailArea to: ${filePath}`);
             if (!fs.existsSync(dir)) {
                 fs.mkdirSync(dir, { recursive: true });
             }
-            fs.writeFileSync(filePath, JSON.stringify(obsArray, null, 2));
+            fs.writeFileSync(filePath, JSON.stringify(sceneConfig, null, 2));
             console.log(`Saved ${obsArray.length} obstacles to ${filePath}`);
         } catch (e) {
             console.error("Failed to save scene.json", e);
@@ -303,22 +323,40 @@ export class NetworkHackServer {
 
                 socket.on('move-end', (data: any) => {
                     const p = this.players.get(socket.id);
-                    if (p && !this.isPlayerCaught(socket.id)) {
-                        p.position = data.position;
-                        p.quaternion = data.quaternion;
-                        this.tryCatchPlayers();
-                        this.broadcastGameState();
+                    if (p) {
+                        const caught = this.isPlayerCaught(socket.id);
+                        if (!caught) {
+                            p.position = data.position;
+                            p.quaternion = data.quaternion;
+                            this.tryCatchPlayers();
+                            this.checkRescue(socket.id);
+                            this.broadcastGameState();
+                        } else {
+                            p.quaternion = data.quaternion;
+                        }
                     }
                 });
 
                 socket.on('move-update', (data: any) => {
                     const p = this.players.get(socket.id);
-                    if (p && !this.isPlayerCaught(socket.id)) {
-                        p.position = data.position;
-                        p.quaternion = data.quaternion;
-                        this.tryCatchPlayers();
-                        this.broadcastGameState();
+                    if (p) {
+                        const caught = this.isPlayerCaught(socket.id);
+                        if (!caught) {
+                            p.position = data.position;
+                            p.quaternion = data.quaternion;
+                            this.tryCatchPlayers();
+                            this.checkRescue(socket.id);
+                            this.broadcastGameState();
+                        } else {
+                            p.quaternion = data.quaternion;
+                        }
                     }
+                });
+
+                socket.on('jail-update', (data: { position: Vector3, scale: Vector3 }) => {
+                    this.jailArea = data;
+                    this.saveScene();
+                    this.broadcastGameState(true);
                 });
 
                 socket.on('obstacle-add', (data: ObstacleState) => {
@@ -326,7 +364,7 @@ export class NetworkHackServer {
                     console.log(`Received obstacle-add: ${data.id}`);
                     this.obstacles.set(data.id, data);
                     this.saveScene();
-                    this.broadcastGameState();
+                    this.broadcastGameState(true);
                 });
 
                 socket.on('obstacle-update', (data: ObstacleState) => {
@@ -337,7 +375,7 @@ export class NetworkHackServer {
                     const updated = { ...existing, ...data };
                     this.obstacles.set(data.id, updated);
                     this.saveScene();
-                    this.broadcastGameState();
+                    this.broadcastGameState(true);
                 });
 
                 socket.on('shoot', (data: ShootEvent) => {
@@ -397,6 +435,7 @@ export class NetworkHackServer {
                 id: c.id,
                 position: c.position
             })),
+            jailArea: this.jailArea,
             catcherId: this.catcherId || undefined,
             catcherSlowedUntil: this.catcherSlowedUntil,
             caughtPlayerIds: Array.from(this.caughtPlayerIds),
@@ -486,18 +525,44 @@ export class NetworkHackServer {
             const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
             if (distance <= this.catchDistance) {
                 this.caughtPlayerIds.add(id);
-                console.log(`Player ${id} caught by ${this.catcherId}`);
+                // Teleport to jail
+                player.position = { 
+                    x: this.jailArea.position.x + (Math.random() - 0.5) * (this.jailArea.scale.x * 0.5),
+                    y: 0.5,
+                    z: this.jailArea.position.z + (Math.random() - 0.5) * (this.jailArea.scale.z * 0.5)
+                };
+                console.log(`Player ${id} caught and jailed!`);
             }
         }
 
         this.checkGameOver();
     }
 
+    private checkRescue(playerId: string): void {
+        if (this.inLobby || this.isGameOver || this.caughtPlayerIds.size === 0) return;
+        if (playerId === this.catcherId || this.caughtPlayerIds.has(playerId)) return;
+
+        const player = this.players.get(playerId);
+        if (!player) return;
+
+        // Check if player is touching jail area
+        const halfX = this.jailArea.scale.x / 2 + 1.0; // Slightly larger for easier rescue
+        const halfZ = this.jailArea.scale.z / 2 + 1.0;
+        const dx = Math.abs(player.position.x - this.jailArea.position.x);
+        const dz = Math.abs(player.position.z - this.jailArea.position.z);
+
+        if (dx <= halfX && dz <= halfZ) {
+            console.log(`Player ${playerId} RESCUED EVERYONE!`);
+            this.caughtPlayerIds.clear();
+            this.broadcastGameState();
+        }
+    }
+
     private triggerGameOver(): void {
         if (this.isGameOver) return;
         this.isGameOver = true;
         console.log('Game over triggered');
-        this.broadcastGameState();
+        this.broadcastGameState(true); // Full state on game over
         
         // Wait 5 seconds then return to lobby
         setTimeout(() => {
@@ -524,9 +589,16 @@ export class NetworkHackServer {
         }
     }
 
-    private broadcastGameState(): void {
+    private broadcastGameState(forceStatic: boolean = false): void {
         if (this.serverSocket) {
             const state = this.getGameState();
+            
+            // Optimization: Remove static data from frequent updates to reduce lag
+            if (!forceStatic) {
+                (state as any).obstacles = undefined;
+                (state as any).jailArea = undefined;
+            }
+
             this.serverSocket.broadcast(state as any);
         }
     }

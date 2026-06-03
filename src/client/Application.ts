@@ -55,7 +55,6 @@ export class Application {
     private staminaBarContainer!: HTMLDivElement;
     private staminaBarFill!: HTMLDivElement;
     private boostButton!: HTMLButtonElement;
-    private boostUIContainer!: HTMLDivElement;
     private shootButton!: HTMLButtonElement;
     private shootCooldown: number = 0;
 
@@ -86,6 +85,10 @@ export class Application {
         }
 
         this.renderer = new Renderer();
+        
+        // Load cached obstacles and jail area immediately
+        this.loadLocalCache();
+
         this.backgroundMusic = new Audio();
         if (this.shouldPlayMusic) {
             this.backgroundMusic.src = 'music.mp3';
@@ -97,9 +100,11 @@ export class Application {
         if (this.isEditorView) {
             this.editor = new SceneEditor(this.renderer, this.socket);
         }
+        
         this.createLobbyUI();
         this.createGameOverUI();
         this.setupBackgroundMusic();
+        
         if (this.isEditorView) {
             this.createEditorUI();
             this.createGameUI();
@@ -109,10 +114,49 @@ export class Application {
             this.createJoystickUI();
             this.createBoostUI();
         }
+        
         this.setupSocket();
         window.addEventListener('keydown', (e) => this.keys[e.key.toLowerCase()] = true);
         window.addEventListener('keyup', (e) => this.keys[e.key.toLowerCase()] = false);
         requestAnimationFrame((t) => this.update(timestampToNumber(t)));
+    }
+
+    private loadLocalCache() {
+        try {
+            const cachedObstacles = localStorage.getItem('huntsman_obstacles');
+            if (cachedObstacles) {
+                const obstacles = JSON.parse(cachedObstacles);
+                if (Array.isArray(obstacles)) {
+                    obstacles.forEach(o => {
+                        this.renderer.updateObstacle(o.id, o.position, o.scale, false, {
+                            isTeleport: o.isTeleport === true, 
+                            pairId: o.pairId || "", 
+                            color: o.color
+                        });
+                    });
+                }
+            }
+            const cachedJail = localStorage.getItem('huntsman_jail');
+            if (cachedJail) {
+                const jail = JSON.parse(cachedJail);
+                this.renderer.updateJailArea(jail);
+            }
+        } catch (e) {
+            console.error("Failed to load local cache", e);
+        }
+    }
+
+    private saveLocalCache(obstacles?: any[], jailArea?: any) {
+        try {
+            if (obstacles) {
+                localStorage.setItem('huntsman_obstacles', JSON.stringify(obstacles));
+            }
+            if (jailArea) {
+                localStorage.setItem('huntsman_jail', JSON.stringify(jailArea));
+            }
+        } catch (e) {
+            console.error("Failed to save local cache", e);
+        }
     }
 
     private setupSocket() {
@@ -125,16 +169,6 @@ export class Application {
             this.myId = data.yourId;
             this.renderer.setMyId(data.yourId);
             this.handleGameState(data.gameState);
-            
-            // Re-run alignment logic immediately
-            const boostUI = document.getElementById('boost-ui-container');
-            if (boostUI && !this.inLobby && !this.isGameOver) {
-                const isCatcher = this.myId === this.catcherId;
-                if (this.boostButton) this.boostButton.style.display = isCatcher ? 'block' : 'none';
-                if (this.staminaBarContainer) this.staminaBarContainer.style.display = isCatcher ? 'block' : 'none';
-                if (this.shootButton) this.shootButton.style.display = !isCatcher ? 'block' : 'none';
-                if (this.ammoText) this.ammoText.style.display = !isCatcher ? 'block' : 'none';
-            }
         });
         this.socket.on('broadcast', (state: GameState) => {
             this.handleGameState(state);
@@ -149,31 +183,38 @@ export class Application {
         container.style.zIndex = '100';
         container.style.color = '#ffffff';
         container.style.fontFamily = 'Arial, sans-serif';
-        container.style.fontSize = '14px';
-        container.style.textShadow = '0 0 6px rgba(0,0,0,0.8)';
+        container.style.fontSize = '22px'; // Increased from 14px
+        container.style.textShadow = '0 0 8px rgba(0,0,0,0.9)';
         container.style.pointerEvents = 'none';
-        container.style.maxWidth = '320px';
+        container.style.maxWidth = '400px';
+
         this.timerText = document.createElement('div');
-        this.timerText.style.marginBottom = '8px';
+        this.timerText.style.marginBottom = '12px';
         this.timerText.textContent = 'Time: 0s';
         container.appendChild(this.timerText);
+
         this.ammoText = document.createElement('div');
-        this.ammoText.style.marginBottom = '8px';
+        this.ammoText.style.marginBottom = '12px';
         this.ammoText.textContent = 'Ammo: 0';
         container.appendChild(this.ammoText);
+
         this.gameStatusText = document.createElement('div');
-        this.gameStatusText.style.marginBottom = '8px';
-        this.gameStatusText.style.fontWeight = '600';
+        this.gameStatusText.style.marginBottom = '12px';
+        this.gameStatusText.style.fontWeight = 'bold';
         container.appendChild(this.gameStatusText);
+
         const caughtTitle = document.createElement('div');
         caughtTitle.textContent = 'Caught players:';
-        caughtTitle.style.marginBottom = '4px';
+        caughtTitle.style.marginBottom = '8px';
+        caughtTitle.style.fontSize = '18px';
         container.appendChild(caughtTitle);
+
         this.caughtList = document.createElement('div');
         this.caughtList.style.display = 'flex';
         this.caughtList.style.flexWrap = 'wrap';
-        this.caughtList.style.gap = '6px';
+        this.caughtList.style.gap = '10px';
         container.appendChild(this.caughtList);
+
         document.body.appendChild(container);
         this.statusContainer = container;
     }
@@ -193,7 +234,7 @@ export class Application {
         overlay.style.borderRadius = '12px';
         overlay.style.maxWidth = '360px';
         overlay.style.lineHeight = '1.5';
-        overlay.innerHTML = '<strong>Editor Mode</strong><br>Click obstacles to select, use arrow keys to move, U/J/I/K/O/L to scale, N to add obstacle, T to add teleport pair.';
+        overlay.innerHTML = '<strong>Editor Mode</strong><br>Click obstacles to select, use arrow keys to move, U/J/I/K/O/L to scale, N to add obstacle, T to add teleport pair, J to select Jail area.';
         document.body.appendChild(overlay);
         this.editorOverlay = overlay;
     }
@@ -416,7 +457,8 @@ export class Application {
 
     private handleShoot() {
         const cube = this.renderer.getCube(this.myId!);
-        if (!cube) return;
+        if (!cube || this.currentAmmo <= 0) return;
+        
         const shootDir = new THREE.Vector3(0, 0, -1);
         if (this.joystickVector.lengthSq() > 0.01) {
             shootDir.set(this.joystickVector.x, 0, -this.joystickVector.y).normalize();
@@ -428,6 +470,7 @@ export class Application {
             if (this.keys['d'] || this.keys['arrowright']) x = 1;
             if (x !== 0 || z !== 0) shootDir.set(x, 0, z).normalize();
         }
+        
         this.socket.emit('shoot', {
             position: { x: cube.position.x, y: cube.position.y, z: cube.position.z },
             direction: { x: shootDir.x, y: shootDir.y, z: shootDir.z }
@@ -547,17 +590,12 @@ export class Application {
 
         window.addEventListener('pointerdown', resumeMusic, { once: true });
         window.addEventListener('keydown', resumeMusic, { once: true });
-        this.backgroundMusic.addEventListener('error', () => {
-            console.warn('Background music could not be loaded.', this.backgroundMusic.error);
-        });
     }
 
     private startBackgroundMusic() {
         if (!this.shouldPlayMusic || !this.hasUserInteracted) return;
         if (this.backgroundMusic.paused) {
-            void this.backgroundMusic.play().catch(() => {
-                // Autoplay denied until user interacts.
-            });
+            void this.backgroundMusic.play().catch(() => {});
         }
     }
 
@@ -601,7 +639,7 @@ export class Application {
             this.gameStatusText.appendChild(catcherLabel);
             if (catcherPlayer) {
                 const colorDot = document.createElement('span');
-                colorDot.style.width = '12px'; colorDot.style.height = '12px';
+                colorDot.style.width = '14px'; colorDot.style.height = '14px';
                 colorDot.style.borderRadius = '50%'; colorDot.style.display = 'inline-block';
                 colorDot.style.backgroundColor = `#${catcherPlayer.color.toString(16).padStart(6, '0')}`;
                 colorDot.style.border = '1px solid #fff'; colorDot.style.verticalAlign = 'middle';
@@ -609,24 +647,26 @@ export class Application {
             }
         }
         const myStatus = document.createElement('div');
-        myStatus.style.marginTop = '4px';
+        myStatus.style.marginTop = '6px';
         myStatus.textContent = this.mode === AppMode.CATCHER_VIEW ? 'Catcher View' : 'Spectating';
         this.gameStatusText.appendChild(myStatus);
+
         this.caughtList.innerHTML = '';
         const caughtPlayers = state.players ? state.players.filter(p => this.caughtPlayerIds.has(p.id)) : [];
         if (caughtPlayers.length === 0) {
             const emptyNode = document.createElement('div');
             emptyNode.textContent = 'None';
             emptyNode.style.opacity = '0.8';
+            emptyNode.style.fontSize = '18px';
             this.caughtList.appendChild(emptyNode);
         } else {
             caughtPlayers.forEach(player => {
                 const playerDot = document.createElement('span');
-                playerDot.style.width = '18px'; playerDot.style.height = '18px';
+                playerDot.style.width = '24px'; playerDot.style.height = '24px'; // Increased from 18px
                 playerDot.style.borderRadius = '50%'; playerDot.style.display = 'inline-block';
                 playerDot.style.backgroundColor = `#${player.color.toString(16).padStart(6, '0')}`;
                 playerDot.title = player.name || `Player ${player.id}`;
-                playerDot.style.border = '1px solid rgba(255,255,255,0.8)';
+                playerDot.style.border = '2px solid rgba(255,255,255,0.8)';
                 this.caughtList.appendChild(playerDot);
             });
         }
@@ -670,7 +710,6 @@ export class Application {
                     boostUI.style.display = 'flex';
                     const isCatcher = this.myId === this.catcherId;
                     
-                    // Update role locally based on server state to ensure movement logic works
                     if (isCatcher) this.role = 'catcher';
                     else if (this.role === 'catcher') this.role = 'player';
 
@@ -696,7 +735,6 @@ export class Application {
                 const cube = this.renderer.getCube(p.id);
                 if (isLocal) {
                     const needsInit = !cube;
-                    // For local player, if they were moved by the server (e.g. at start of game), teleport them
                     if (cube && this.teleportGracePeriod <= 0) {
                         const serverPos = new THREE.Vector3(p.position.x, p.position.y, p.position.z);
                         if (serverPos.distanceTo(cube.position) > 4.0) {
@@ -726,11 +764,16 @@ export class Application {
                 });
             });
             this.renderer.cleanupObstacles(currentObsIds);
+            this.saveLocalCache(state.obstacles, state.jailArea);
         }
 
         this.renderer.setCatcherSlowed(state.catcherSlowedUntil || 0);
         
-        // Ensure projectiles and collectibles are updated regardless of mode
+        if (state.jailArea) {
+            this.renderer.updateJailArea(state.jailArea);
+            this.saveLocalCache(undefined, state.jailArea);
+        }
+        
         if (state.projectiles) this.renderer.updateProjectiles(state.projectiles);
         if (state.collectibles) this.renderer.updateCollectibles(state.collectibles);
 
@@ -806,7 +849,6 @@ export class Application {
             this.updateObstacleTransparency();
             this.renderer.updatePhysics(deltaTime);
             
-            // Sync final state (position and automated rotation) to the server
             if (cube && canMove) {
                 this.syncToServer(cube);
             }
@@ -818,7 +860,12 @@ export class Application {
         requestAnimationFrame((t) => this.update(timestampToNumber(t)));
     }
 
+    private lastTransparencyUpdate: number = 0;
     private updateObstacleTransparency() {
+        const now = Date.now();
+        if (now - this.lastTransparencyUpdate < 100) return;
+        this.lastTransparencyUpdate = now;
+
         const cam = this.renderer.getCamera();
         const camPos = cam.position;
         const transparentIds = new Set<string>();
@@ -837,7 +884,6 @@ export class Application {
                 }
             });
         } else if (isCatcherPath || isCatcherView) {
-            // 1. Catcher itself (local or remote) should always trigger transparency for obstacles in front of it
             const catcherIdToTrack = isCatcherPath ? this.myId : this.catcherId;
             if (catcherIdToTrack) {
                 const cube = this.renderer.getCube(catcherIdToTrack);
@@ -847,7 +893,6 @@ export class Application {
                 }
             }
 
-            // 2. Other players ONLY if the catcher has LoS to them
             if (this.catcherId) {
                 this.players.forEach(pid => {
                     if (pid === this.catcherId) return;
@@ -900,24 +945,17 @@ export class Application {
             }
         }
 
-        if (moveDir.lengthSq() > 0 || true) { // Always apply gravity
-            this.wasMoving = true;
-            const isCatcher = this.myId === this.catcherId;
-            const isSlowed = isCatcher && Date.now() < this.renderer.getCatcherSlowedUntil();
-            const baseSpeed = isCatcher ? 10 : 9;
-            const speedMult = isSlowed ? 0.4 : 1.0;
-            const speed = ((isCatcher && this.isBoosting && this.stamina > 0) ? baseSpeed * 1.8 : baseSpeed) * inputMagnitude * speedMult;
-            
-            const horizontalMovement = moveDir.clone().multiplyScalar(speed * deltaTime);
-            const gravity = -12.0 * deltaTime; // Slightly stronger gravity for better grounding
-            const movement = new THREE.Vector3(horizontalMovement.x, gravity, horizontalMovement.z);
-            
-            this.renderer.movePlayer(this.myId!, movement);
-        } else if (this.wasMoving) {
-            this.wasMoving = false;
-            const cube = this.renderer.getCube(this.myId!);
-            if (cube) this.syncToServer(cube);
-        }
+        const isCatcher = this.myId === this.catcherId;
+        const isSlowed = isCatcher && Date.now() < this.renderer.getCatcherSlowedUntil();
+        const baseSpeed = isCatcher ? 10 : 9;
+        const speedMult = isSlowed ? 0.4 : 1.0;
+        const speed = ((isCatcher && this.isBoosting && this.stamina > 0) ? baseSpeed * 1.8 : baseSpeed) * inputMagnitude * speedMult;
+        
+        const horizontalMovement = moveDir.clone().multiplyScalar(speed * deltaTime);
+        const gravity = -12.0 * deltaTime; 
+        const movement = new THREE.Vector3(horizontalMovement.x, gravity, horizontalMovement.z);
+        
+        this.renderer.movePlayer(this.myId!, movement);
     }
 
     private checkTeleportLogic() {

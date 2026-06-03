@@ -6,6 +6,7 @@ export class SceneEditor {
     private renderer: Renderer;
     private socket: Socket;
     private selectedObstacle: THREE.Mesh | null = null;
+    private selectedJail: THREE.Mesh | null = null;
     private highlight: THREE.BoxHelper | null = null;
     private raycaster = new THREE.Raycaster();
     private mouse = new THREE.Vector2();
@@ -13,7 +14,7 @@ export class SceneEditor {
     // Set of keys that trigger a save when released
     private transformKeys: Set<string> = new Set([
         'arrowup', 'arrowdown', 'arrowleft', 'arrowright',
-        'u', 'j', 'i', 'k', 'o', 'l', '+', '-', '='
+        'u', 'j', 'i', 'k', 'o', 'l', '+', '-', '=', 'pageup', 'pagedown'
     ]);
 
     constructor(renderer: Renderer, socket: Socket) {
@@ -25,6 +26,7 @@ export class SceneEditor {
     }
 
     public getSelectedId(): string | null {
+        if (this.selectedJail) return "jail";
         if (!this.selectedObstacle) return null;
         return this.renderer.getObstacleId(this.selectedObstacle);
     }
@@ -35,42 +37,68 @@ export class SceneEditor {
         this.mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
         this.raycaster.setFromCamera(this.mouse, this.renderer.getCamera());
-        const intersects = this.raycaster.intersectObjects(this.renderer.getObstacles());
+        
+        // Check for jail mesh first
+        const jailMesh = this.renderer.getJailMesh();
+        if (jailMesh) {
+            const jailIntersects = this.raycaster.intersectObject(jailMesh);
+            if (jailIntersects.length > 0) {
+                this.selectJail(jailMesh);
+                return;
+            }
+        }
 
+        const intersects = this.raycaster.intersectObjects(this.renderer.getObstacles());
         if (intersects.length > 0) {
             this.selectObstacle(intersects[0].object as THREE.Mesh);
         } else {
-            this.deselectObstacle();
+            this.deselectAll();
         }
     }
 
     private selectObstacle(obstacle: THREE.Mesh) {
         if (this.selectedObstacle === obstacle) return;
-        
-        this.deselectObstacle();
+        this.deselectAll();
         this.selectedObstacle = obstacle;
-        
         this.highlight = new THREE.BoxHelper(obstacle, 0xffff00);
         this.renderer.getScene().add(this.highlight);
+        console.log("Selected obstacle:", this.renderer.getObstacleId(obstacle));
     }
 
-    private deselectObstacle() {
+    private selectJail(jail: THREE.Mesh) {
+        if (this.selectedJail === jail) return;
+        this.deselectAll();
+        this.selectedJail = jail;
+        this.highlight = new THREE.BoxHelper(jail, 0xff0000);
+        this.renderer.getScene().add(this.highlight);
+        console.log("Selected jail area");
+    }
+
+    private deselectAll() {
         if (this.highlight) {
             this.renderer.getScene().remove(this.highlight);
             this.highlight = null;
         }
         this.selectedObstacle = null;
+        this.selectedJail = null;
     }
 
     private handleKeyUp(e: KeyboardEvent) {
         const key = e.key.toLowerCase();
-        if (this.selectedObstacle && this.transformKeys.has(key)) {
+        if ((this.selectedObstacle || this.selectedJail) && this.transformKeys.has(key)) {
             this.emitUpdate();
-            console.log("Transformation saved on key up:", key);
         }
     }
 
     private emitUpdate() {
+        if (this.selectedJail) {
+            this.socket.emit('jail-update', {
+                position: { x: this.selectedJail.position.x, y: this.selectedJail.position.y, z: this.selectedJail.position.z },
+                scale: { x: this.selectedJail.scale.x, y: this.selectedJail.scale.y, z: this.selectedJail.scale.z }
+            });
+            return;
+        }
+
         if (!this.selectedObstacle) return;
         const id = this.renderer.getObstacleId(this.selectedObstacle);
         if (id) {
@@ -131,45 +159,60 @@ export class SceneEditor {
             return;
         }
 
-        if (!this.selectedObstacle) return;
+        if (key === 'j' && !this.selectedJail) {
+            const jailMesh = this.renderer.getJailMesh();
+            if (jailMesh) {
+                this.selectJail(jailMesh);
+                return;
+            }
+        }
+
+        const mesh = this.selectedObstacle || this.selectedJail;
+        if (!mesh) return;
 
         const moveStep = 0.5;
         const scaleStep = 0.1;
         let changed = false;
 
-        if (e.key === 'ArrowUp') { this.selectedObstacle.position.z -= moveStep; changed = true; }
-        if (e.key === 'ArrowDown') { this.selectedObstacle.position.z += moveStep; changed = true; }
-        if (e.key === 'ArrowLeft') { this.selectedObstacle.position.x -= moveStep; changed = true; }
-        if (e.key === 'ArrowRight') { this.selectedObstacle.position.x += moveStep; changed = true; }
+        // Use lowercased 'key' for comparison to be safe
+        if (key === 'arrowup') { mesh.position.z -= moveStep; changed = true; }
+        if (key === 'arrowdown') { mesh.position.z += moveStep; changed = true; }
+        if (key === 'arrowleft') { mesh.position.x -= moveStep; changed = true; }
+        if (key === 'arrowright') { mesh.position.x += moveStep; changed = true; }
 
-        if (key === 'u') { this.selectedObstacle.scale.x += scaleStep; changed = true; }
-        if (key === 'j') { this.selectedObstacle.scale.x -= scaleStep; changed = true; }
-        if (key === 'i') { this.selectedObstacle.scale.y += scaleStep; changed = true; }
-        if (key === 'k') { this.selectedObstacle.scale.y -= scaleStep; changed = true; }
-        if (key === 'o') { this.selectedObstacle.scale.z += scaleStep; changed = true; }
-        if (key === 'l') { this.selectedObstacle.scale.z -= scaleStep; changed = true; }
+        if (key === 'u') { mesh.scale.x += scaleStep; changed = true; }
+        if (key === 'j') { mesh.scale.x -= scaleStep; changed = true; }
+        if (key === 'i') { mesh.scale.y += scaleStep; changed = true; }
+        if (key === 'k') { mesh.scale.y -= scaleStep; changed = true; }
+        if (key === 'o') { mesh.scale.z += scaleStep; changed = true; }
+        if (key === 'l') { mesh.scale.z -= scaleStep; changed = true; }
 
-        // Robust check for + and - keys
-        if (e.key === '+' || e.key === '=' || e.code === 'Equal' || e.code === 'NumpadAdd') { 
-            this.selectedObstacle.position.y += moveStep; 
+        if (key === '+' || key === '=' || e.code === 'Equal' || e.code === 'NumpadAdd') { 
+            mesh.position.y += moveStep; 
             changed = true; 
         }
-        if (e.key === '-' || e.code === 'Minus' || e.code === 'NumpadSubtract') { 
-            this.selectedObstacle.position.y -= moveStep; 
+        if (key === '-' || key === '_' || e.code === 'Minus' || e.code === 'NumpadSubtract') { 
+            mesh.position.y -= moveStep; 
             changed = true; 
         }
+        
+        if (key === 'pageup') { mesh.position.y += moveStep; changed = true; }
+        if (key === 'pagedown') { mesh.position.y -= moveStep; changed = true; }
 
         if (changed) {
-            this.selectedObstacle.scale.x = Math.max(0.1, this.selectedObstacle.scale.x);
-            this.selectedObstacle.scale.y = Math.max(0.1, this.selectedObstacle.scale.y);
-            this.selectedObstacle.scale.z = Math.max(0.1, this.selectedObstacle.scale.z);
+            mesh.scale.x = Math.max(0.1, mesh.scale.x);
+            mesh.scale.y = Math.max(0.1, mesh.scale.y);
+            mesh.scale.z = Math.max(0.1, mesh.scale.z);
 
             if (this.highlight) this.highlight.update();
             
-            // Update the renderer and physics collider immediately
-            const id = this.renderer.getObstacleId(this.selectedObstacle);
-            if (id) {
-                this.renderer.updateObstacle(id, this.selectedObstacle.position, this.selectedObstacle.scale);
+            if (this.selectedObstacle) {
+                const id = this.renderer.getObstacleId(this.selectedObstacle);
+                if (id) {
+                    this.renderer.updateObstacle(id, this.selectedObstacle.position, this.selectedObstacle.scale);
+                }
+            } else if (this.selectedJail) {
+                this.renderer.updateJailArea({ position: this.selectedJail.position, scale: this.selectedJail.scale });
             }
 
             this.emitUpdate();

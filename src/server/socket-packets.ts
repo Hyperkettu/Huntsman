@@ -57,6 +57,7 @@ export interface GameState {
     obstacles: ObstacleState[];
     projectiles?: ProjectileState[];
     collectibles?: CollectibleState[];
+    jailArea?: { position: Vector3, scale: Vector3 };
     catcherId?: string;
     catcherSlowedUntil?: number;
     caughtPlayerIds?: string[];
